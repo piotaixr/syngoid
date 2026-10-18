@@ -127,6 +127,23 @@ func TestDatasetNameWithSpaces(t *testing.T) {
 	}
 }
 
+func TestPrincipalNameWithSpaces(t *testing.T) {
+	d, err := ParseAllow("---- Permissions on tank ----\nLocal+Descendent permissions:\n" +
+		"\tgroup domain users destroy\n\tuser jane  doe send,hold\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Effective(d, "tank/x", "x", []string{"domain users"}); keys(got) != "destroy" {
+		t.Errorf("group domain users: got %s, want destroy", keys(got))
+	}
+	if got := Effective(d, "tank", "jane  doe", nil); keys(got) != "hold,send" {
+		t.Errorf("user jane  doe: got %s, want hold,send", keys(got))
+	}
+	if got := Effective(d, "tank", "x", []string{"domain"}); keys(got) != "" {
+		t.Errorf("group domain: got %s, want nothing", keys(got))
+	}
+}
+
 func TestUnknownSubsectionTolerated(t *testing.T) {
 	d, err := ParseAllow("---- Permissions on tank ----\nWeird permissions:\n\tfoo bar baz\nLocal permissions:\n\teveryone send\n")
 	if err != nil {

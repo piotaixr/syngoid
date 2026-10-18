@@ -1,0 +1,2 @@
+go test fuzz v1
+string("---- Permissions on 0\nDescendent permissions:\n\tuser 0\f0")

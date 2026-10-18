@@ -98,8 +98,12 @@ func ParseAllow(out string) (Delegations, error) {
 		}
 		g := grant{scope: sc, kind: f[0]}
 		switch {
-		case (f[0] == "user" || f[0] == "group") && len(f) == 3:
-			g.name, g.perms = f[1], splitPerms(f[2])
+		case (f[0] == "user" || f[0] == "group") && len(f) >= 3:
+			// The permissions are the last field; the name, which may
+			// contain spaces ("domain users"), is everything before it.
+			perms := f[len(f)-1]
+			rest := strings.TrimSuffix(strings.TrimSpace(line), perms)
+			g.name, g.perms = strings.TrimSpace(rest[len(f[0]):]), splitPerms(perms)
 		case f[0] == "everyone" && len(f) == 2:
 			g.perms = splitPerms(f[1])
 		default:
