@@ -145,16 +145,20 @@ func Preflight(ctx context.Context, src, dst endpoint.Endpoint, o *cli.Options, 
 		if err != nil {
 			return rep, err
 		}
+		parsed := map[string]perms.Delegations{}
 		for _, c := range checks {
-			raw, err := s.ep.Allow(ctx, c.check)
-			if err != nil {
-				return rep, fmt.Errorf("%s: zfs allow %s: %w", sr.Label, c.check, err)
+			d, ok := parsed[c.allow]
+			if !ok {
+				raw, err := s.ep.Allow(ctx, c.allow)
+				if err != nil {
+					return rep, fmt.Errorf("%s: zfs allow %s: %w", sr.Label, c.allow, err)
+				}
+				if d, err = perms.ParseAllow(raw); err != nil {
+					return rep, fmt.Errorf("%s: %s: %w", sr.Label, c.allow, err)
+				}
+				parsed[c.allow] = d
 			}
-			d, err := perms.ParseAllow(raw)
-			if err != nil {
-				return rep, fmt.Errorf("%s: %s: %w", sr.Label, c.check, err)
-			}
-			have := perms.Effective(d, c.check, s.info.User, s.info.Groups)
+			have := perms.Effective(d, c.eval, s.info.User, s.info.Groups)
 			if miss := perms.Missing(have, req); len(miss) > 0 {
 				rep.Sides[i].Missing = append(rep.Sides[i].Missing, DatasetMissing{Dataset: c.shown, Missing: miss})
 			}
@@ -184,12 +188,10 @@ func preservedProps(ctx context.Context, src endpoint.Endpoint, o *cli.Options, 
 		if err != nil {
 			return nil, false, fmt.Errorf("local properties of %s: %w", st.Source, err)
 		}
-		for k := range local {
-			switch {
-			case strings.Contains(k, ":"):
+		for _, k := range PreservedPropKeys(local, unprivLinux) {
+			if strings.Contains(k, ":") {
 				userProps = true
-			case slices.Contains(PreservePropsDenylist, k), unprivLinux && (k == "mountpoint" || k == "canmount"):
-			default:
+			} else {
 				set[k] = true
 			}
 		}
@@ -241,7 +243,11 @@ func parentDataset(ds string) string {
 	return ds[:i]
 }
 
-type checkTarget struct{ shown, check string }
+// checkTarget is one delegation check: read `zfs allow` on allow and resolve
+// the permissions for eval. For a target that does not exist yet allow is its
+// closest existing ancestor and eval the absent dataset itself, so only
+// grants that reach descendents count (spec 6.3).
+type checkTarget struct{ shown, allow, eval string }
 
 // datasetsToCheck lists, without repeats, the datasets whose delegations must
 // be read for side: each source dataset; each existing target dataset, and
@@ -250,26 +256,27 @@ type checkTarget struct{ shown, check string }
 func datasetsToCheck(ctx context.Context, side Side, states []DatasetState, exists func(context.Context, string) (bool, error)) ([]checkTarget, error) {
 	var out []checkTarget
 	seen := map[string]bool{}
-	add := func(shown, check string) {
-		if check != "" && !seen[check] {
-			seen[check] = true
-			out = append(out, checkTarget{shown, check})
+	add := func(shown, allow, eval string) {
+		key := allow + "\x00" + fmt.Sprint(eval == allow)
+		if allow != "" && !seen[key] {
+			seen[key] = true
+			out = append(out, checkTarget{shown, allow, eval})
 		}
 	}
 	for _, st := range states {
 		if side == Source {
-			add(st.Source, st.Source)
+			add(st.Source, st.Source, st.Source)
 			continue
 		}
 		if st.TargetExists {
-			add(st.Target, st.Target)
+			add(st.Target, st.Target, st.Target)
 			continue
 		}
 		anc, err := closestExisting(ctx, exists, parentDataset(st.Target))
 		if err != nil {
 			return nil, err
 		}
-		add(st.Target, anc)
+		add(st.Target, anc, st.Target)
 	}
 	return out, nil
 }

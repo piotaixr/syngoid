@@ -20,6 +20,22 @@ var PreservePropsDenylist = []string{
 	"casesensitivity", "normalization", "utf8only",
 }
 
+// PreservedPropKeys returns, sorted, the locally-set properties that
+// --preserve-properties passes to the receive: all but the denylisted ones
+// and, for an unprivileged Linux target, mountpoint and canmount. Preflight
+// and RecvArgs both use it so the checked permissions match what is set.
+func PreservedPropKeys(localProps map[string]string, unprivLinux bool) []string {
+	keys := make([]string, 0, len(localProps))
+	for k := range localProps {
+		if slices.Contains(PreservePropsDenylist, k) || unprivLinux && (k == "mountpoint" || k == "canmount") {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // RecvArgs builds the zfs receive flags: the filtered --recvoptions first,
 // then -s, -F and -u as applicable, then -o key=value pairs sorted by key.
 // With --preserve-properties the pairs are the locally-set source properties
@@ -38,14 +54,7 @@ func RecvArgs(o *cli.Options, full bool, sourceType string, localProps map[strin
 	}
 	switch {
 	case o.PreserveProperties:
-		keys := make([]string, 0, len(localProps))
-		for k := range localProps {
-			if slices.Contains(PreservePropsDenylist, k) || unprivLinux && (k == "mountpoint" || k == "canmount") {
-				continue
-			}
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
+		keys := PreservedPropKeys(localProps, unprivLinux)
 		for _, k := range keys {
 			args = append(args, "-o", k+"="+localProps[k])
 		}

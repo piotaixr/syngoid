@@ -289,3 +289,54 @@ func TestPreflightMissingFullAndLabels(t *testing.T) {
 		}
 	}
 }
+
+// allowScoped is like allowFor with an explicit section title scope.
+func allowScoped(ds, user, perms, scope string) string {
+	return "---- Permissions on " + ds + " ----------------------------------------\n" +
+		scope + " permissions:\n\tuser " + user + " " + perms + "\n"
+}
+
+func TestPreflightAbsentTargetNeedsDescendentGrant(t *testing.T) {
+	const perms = "create,mount,receive,rollback,destroy"
+	srcAllow := map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy")}
+	for _, tc := range []struct {
+		name   string
+		target string
+		scope  string
+		wantOK bool
+	}{
+		{"local only", "backup/data", "Local", false},
+		{"local+descendent", "backup/data", "Local+Descendent", true},
+		{"descendent only", "backup/data", "Descendent", true},
+		{"local only, deep chain", "backup/x/y/z", "Local", false},
+		{"local+descendent, deep chain", "backup/x/y/z", "Local+Descendent", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newPfEnv()
+			e.o.Target.Dataset = tc.target
+			e.states = []DatasetState{{Source: "tank/data", Target: tc.target}}
+			e.src.Faults.Allow = srcAllow
+			e.dst.Faults.Allow = map[string]string{"backup": allowScoped("backup", "backup", perms, tc.scope)}
+			r := e.run(t, e.src, e.dst)
+			if r.OK() != tc.wantOK {
+				t.Fatalf("OK = %v, want %v: %+v", r.OK(), tc.wantOK, r.Sides[1])
+			}
+			if r.Sides[1].GrantDataset != "backup" {
+				t.Errorf("GrantDataset = %q", r.Sides[1].GrantDataset)
+			}
+			if !tc.wantOK && r.Sides[1].Missing[0].Dataset != tc.target {
+				t.Errorf("reported dataset = %q, want %q", r.Sides[1].Missing[0].Dataset, tc.target)
+			}
+		})
+	}
+}
+
+func TestPreservedPropKeys(t *testing.T) {
+	local := map[string]string{"compression": "lz4", "guid": "1", "mountpoint": "/x", "canmount": "on", "a:b": "c", "atime": "off"}
+	if got, want := PreservedPropKeys(local, false), []string{"a:b", "atime", "canmount", "compression", "mountpoint"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("privileged = %v, want %v", got, want)
+	}
+	if got, want := PreservedPropKeys(local, true), []string{"a:b", "atime", "compression"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("unprivileged linux = %v, want %v", got, want)
+	}
+}
