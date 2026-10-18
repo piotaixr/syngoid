@@ -4,9 +4,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,7 +38,7 @@ func main() {
 			return endpoint.NewLocal(&zfs.Client{Exec: x, Sudo: sudo}, x)
 		},
 		LoggerReady: func(l *slog.Logger) { logger = l },
-		PoolExists:  poolExists,
+		PoolExists:  (&pools{exec: zfs.OSExec{}, stderr: os.Stderr}).exists,
 	}
 	code := app.Main(ctx, os.Args[1:], env)
 	stop()
@@ -54,15 +56,27 @@ func forceExitOnSecondSignal(ctx context.Context) {
 	os.Exit(2)
 }
 
-// poolExists reports whether a local ZFS pool called name exists. Any error,
-// such as zfs not being installed, counts as no.
-func poolExists(name string) bool {
+// pools answers whether local ZFS pools exist, for telling host:dataset
+// from a local dataset whose pool name contains a colon. It runs before the
+// logger exists, so its warning goes straight to stderr.
+type pools struct {
+	exec   zfs.Exec
+	stderr io.Writer
+	warn   sync.Once
+}
+
+// exists reports whether a local ZFS pool called name exists. Any error,
+// such as zfs not being installed, counts as no and warns once.
+func (p *pools) exists(name string) bool {
 	var out bytes.Buffer
-	err := zfs.OSExec{}.Run(context.Background(), zfs.Cmd{
+	err := p.exec.Run(context.Background(), zfs.Cmd{
 		Argv:   []string{"zfs", "list", "-H", "-o", "name", "-d", "0"},
 		Stdout: &out,
 	})
 	if err != nil {
+		p.warn.Do(func() {
+			_, _ = io.WriteString(p.stderr, "WARNING: Unable to enumerate pools (is zfs available?)\n")
+		})
 		return false
 	}
 	for _, line := range bytes.Split(out.Bytes(), []byte("\n")) {
