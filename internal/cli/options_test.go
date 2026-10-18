@@ -174,6 +174,10 @@ func TestParseValidation(t *testing.T) {
 		{"bad source", []string{"nas:", "b"}, "SOURCE"},
 		{"bad target", []string{"a", "nas:"}, "TARGET"},
 		{"unknown flag", []string{"--nope", "a", "b"}, "nope"},
+		{"same dataset", []string{"tank/data", "tank/data"}, "SOURCE and TARGET are the same dataset: tank/data"},
+		{"target inside source", []string{"tank/data", "tank/data/bak"}, "TARGET tank/data/bak is inside SOURCE tank/data"},
+		{"source inside target", []string{"tank/data/sub", "tank/data"}, "SOURCE tank/data/sub is inside TARGET tank/data"},
+		{"pool root and child", []string{"tank", "tank/bak"}, "TARGET tank/bak is inside SOURCE tank"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -182,6 +186,19 @@ func TestParseValidation(t *testing.T) {
 				t.Errorf("error %q does not contain %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseOverlapAllowed(t *testing.T) {
+	for _, args := range [][]string{
+		{"tank/data", "tank/database"},
+		{"tank/data", "backup/data"},
+		{"nas:tank/data", "tank/data"},
+		{"nas:tank/data", "nas:tank/data/bak"},
+	} {
+		if _, err := Parse(args, func(string) bool { return false }); err != nil {
+			t.Errorf("Parse(%q): %v", args, err)
+		}
 	}
 }
 

@@ -390,7 +390,28 @@ func (r *raw) build(fs *pflag.FlagSet, localPoolExists func(string) bool, pos []
 	if o.Target, err = ParseLocation(pos[1], localPoolExists); err != nil {
 		return nil, nil, fmt.Errorf("TARGET: %w", err)
 	}
+	if err := checkOverlap(o.Source, o.Target); err != nil {
+		return nil, nil, err
+	}
 	return o, warnings, nil
+}
+
+// checkOverlap rejects a local source and target that are the same dataset
+// or where one is inside the other: replicating would read what it writes.
+func checkOverlap(src, dst Location) error {
+	if src.IsRemote() || dst.IsRemote() {
+		return nil
+	}
+	s, d := src.Dataset, dst.Dataset
+	switch {
+	case s == d:
+		return fmt.Errorf("SOURCE and TARGET are the same dataset: %s", s)
+	case strings.HasPrefix(d, s+"/"):
+		return fmt.Errorf("TARGET %s is inside SOURCE %s", d, s)
+	case strings.HasPrefix(s, d+"/"):
+		return fmt.Errorf("SOURCE %s is inside TARGET %s", s, d)
+	}
+	return nil
 }
 
 var sizeRE = regexp.MustCompile(`^([0-9]+)([KMGT]?)(I?B)?$`)
