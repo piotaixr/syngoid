@@ -19,6 +19,9 @@ type Response struct {
 	StdoutBytes []byte
 	Stderr      string
 	Exit        int
+	// NoDrainStdin makes Run ignore the command's Stdin entirely, like a
+	// process that exits without reading its input.
+	NoDrainStdin bool
 	// Block makes Run wait until the context is done and return ctx.Err().
 	Block bool
 }
@@ -50,7 +53,7 @@ func (f *FakeExec) Run(ctx context.Context, c zfs.Cmd) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	if c.Stdin != nil {
+	if c.Stdin != nil && !resp.NoDrainStdin {
 		data, err := io.ReadAll(c.Stdin)
 		f.mu.Lock()
 		if f.Stdin == nil {

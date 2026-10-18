@@ -2,12 +2,14 @@ package endpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/piotaixr/syngoid/internal/stream"
 	"github.com/piotaixr/syngoid/internal/zfs"
@@ -83,10 +85,7 @@ func (l *Local) ReceiveBusy(ctx context.Context, datasets []string) (map[string]
 	}
 	busy := make(map[string]bool, len(datasets))
 	for _, ds := range datasets {
-		re, err := regexp.Compile(`zfs *(receive|recv)[^/]*` + regexp.QuoteMeta(ds) + `$`)
-		if err != nil {
-			return nil, err
-		}
+		re := regexp.MustCompile(`zfs *(receive|recv)[^/]*` + regexp.QuoteMeta(ds) + `$`)
 		busy[ds] = false
 		for _, ln := range lines {
 			if re.MatchString(ln) {
@@ -114,37 +113,61 @@ func (c *countWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// gateWriter forwards to w until discard is called, then drops all writes.
+type gateWriter struct {
+	w       io.Writer
+	discard atomic.Bool
+}
+
+func (g *gateWriter) Write(p []byte) (int, error) {
+	if g.discard.Load() {
+		return len(p), nil
+	}
+	return g.w.Write(p)
+}
+
 // Send runs zfs send, encoding the stream with o.Codec into w. Progress is
-// reported in raw (pre-encoding) bytes.
+// reported in raw (pre-encoding) bytes. The encoder is flushed and closed
+// only when zfs send succeeded; on failure its resources are released
+// without writing anything further to w, so a truncated stream never gets a
+// valid trailer and a stalled consumer cannot block the return.
 func (l *Local) Send(ctx context.Context, s zfs.SendSpec, o SendOpts, w io.Writer) error {
-	enc, err := stream.NewEncoder(o.Codec, w)
+	gate := &gateWriter{w: w}
+	enc, err := stream.NewEncoder(o.Codec, gate)
 	if err != nil {
 		return err
 	}
-	sendErr := l.Client.Send(ctx, s, &countWriter{w: enc, progress: o.Progress})
-	// Always close to release encoder resources; only flush errors matter
-	// when the send itself succeeded.
-	closeErr := enc.Close()
-	if sendErr != nil {
-		return sendErr
+	if err := l.Client.Send(ctx, s, &countWriter{w: enc, progress: o.Progress}); err != nil {
+		gate.discard.Store(true)
+		_ = enc.Close()
+		return err
 	}
-	return closeErr
+	return enc.Close()
 }
+
+// errReceiveDone marks the feeder's pipe as closed by Receive itself; write
+// errors carrying it are never reported.
+var errReceiveDone = errors.New("endpoint: receive finished")
 
 // Receive decodes r with codec and feeds the result to zfs receive. The
 // decoder is built inside the feeding goroutine because some decoders read
-// the stream header on construction.
+// the stream header on construction. A genuine read or decode error wins
+// over the receive error it causes; otherwise the receive error is returned
+// unchanged.
 func (l *Local) Receive(ctx context.Context, s zfs.RecvSpec, codec stream.Codec, r io.Reader) error {
 	pr, pw := io.Pipe()
 	decErr := make(chan error, 1)
 	go func() {
 		err := decodeInto(pw, codec, r)
+		if errors.Is(err, errReceiveDone) {
+			err = nil
+		}
 		decErr <- err // before closing pw so a receive failure sees it
 		pw.CloseWithError(err)
 	}()
 	recvErr := l.Client.Receive(ctx, s, pr)
 	// Unblock the feeder if receive stopped reading early.
-	pr.CloseWithError(io.ErrClosedPipe)
+	pr.CloseWithError(errReceiveDone)
 	if recvErr != nil {
 		select {
 		case err := <-decErr:

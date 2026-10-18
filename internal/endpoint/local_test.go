@@ -7,8 +7,11 @@ import (
 	"io"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/piotaixr/syngoid/internal/endpoint"
@@ -207,8 +210,8 @@ func TestLocalReceiveDecodeError(t *testing.T) {
 	key := "zfs receive tank/b"
 	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{key: {}}}
 	err := newLocal(fe).Receive(context.Background(), zfs.RecvSpec{Dataset: "tank/b", Args: []string{}}, stream.Gzip, bytes.NewReader([]byte("definitely not gzip")))
-	if err == nil {
-		t.Fatal("want decode error")
+	if !errors.Is(err, gzip.ErrHeader) {
+		t.Fatalf("err = %v, want gzip.ErrHeader", err)
 	}
 }
 
@@ -219,5 +222,75 @@ func TestLocalReceiveError(t *testing.T) {
 	var ce *zfs.CommandError
 	if !errors.As(err, &ce) {
 		t.Fatalf("err = %v, want *CommandError", err)
+	}
+}
+
+// endless is an io.Reader producing zeros forever.
+type endless struct{}
+
+func (endless) Read(p []byte) (int, error) { return len(p), nil }
+
+func TestLocalReceiveFailsWithoutDrainingStdin(t *testing.T) {
+	key := "zfs receive tank/b"
+	for range 50 {
+		fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
+			key: {Stderr: "cannot receive: bad stream\n", Exit: 1, NoDrainStdin: true},
+		}}
+		err := newLocal(fe).Receive(context.Background(), zfs.RecvSpec{Dataset: "tank/b"}, stream.None, endless{})
+		var ce *zfs.CommandError
+		if !errors.As(err, &ce) || ce.ExitCode != 1 {
+			t.Fatalf("err = %v, want the *CommandError from zfs receive", err)
+		}
+	}
+}
+
+func TestLocalReceiveSucceedsWithoutDrainingStdin(t *testing.T) {
+	key := "zfs receive tank/b"
+	for range 50 {
+		fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{key: {NoDrainStdin: true}}}
+		if err := newLocal(fe).Receive(context.Background(), zfs.RecvSpec{Dataset: "tank/b"}, stream.None, endless{}); err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+	}
+}
+
+// blockedWriter records writes and then blocks forever (until release).
+type blockedWriter struct {
+	mu      sync.Mutex
+	writes  int
+	release chan struct{}
+}
+
+func (b *blockedWriter) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	b.writes++
+	b.mu.Unlock()
+	<-b.release
+	return len(p), nil
+}
+
+func TestLocalSendFailureWritesNothingAndDoesNotBlock(t *testing.T) {
+	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
+		"zfs send tank/a@s1": {StdoutBytes: payload(4096), Stderr: "cannot send\n", Exit: 1},
+	}}
+	w := &blockedWriter{release: make(chan struct{})}
+	defer close(w.release)
+	done := make(chan error, 1)
+	go func() {
+		done <- newLocal(fe).Send(context.Background(), zfs.SendSpec{Dataset: "tank/a", To: "s1"}, endpoint.SendOpts{Codec: stream.Zstd}, w)
+	}()
+	select {
+	case err := <-done:
+		var ce *zfs.CommandError
+		if !errors.As(err, &ce) {
+			t.Fatalf("err = %v, want *CommandError", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Send blocked on a stalled consumer after zfs send failed")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.writes != 0 {
+		t.Errorf("w received %d writes after failure, want 0", w.writes)
 	}
 }
