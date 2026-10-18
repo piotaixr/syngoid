@@ -29,6 +29,20 @@ jobs:
         with:
           version: v2.15.0
 
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: scripts/ci/setup-zfs.sh
+      - name: integration tests (real ZFS)
+        env:
+          SYNGOID_IT: "1"
+          SYNGOID_IT_INVASIVE: "1"
+        run: sudo -E env PATH=$PATH go test -tags integration -v -timeout 30m ./test/integration/...
+
   cross:
     runs-on: ubuntu-latest
     strategy:
