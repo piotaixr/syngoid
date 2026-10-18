@@ -1,0 +1,6 @@
+# Hand-written fixture in Linux OpenZFS -Hp tab-separated format; must be replaced by captured output in M2 (spec 14.3).
+tank	filesystem	-	1048576	-	-
+tank/data	filesystem	-	2097152	1-abcdef-token	false
+tank/data/clone	filesystem	tank/data@snap1	4096	-	nas,db1
+tank/my data	filesystem	-	8192	-	-
+tank/vol	volume	-	10737418240	-	-

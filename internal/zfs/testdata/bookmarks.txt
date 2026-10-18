@@ -1,0 +1,7 @@
+# Hand-written fixture in Linux OpenZFS -Hp tab-separated format; must be replaced by captured output in M2 (spec 14.3).
+tank/data#bm1	guid	4444444444444444444
+tank/data#bm1	createtxg	100
+tank/data#bm1	creation	1700000000
+tank/data#bm2	guid	5555555555555555555
+tank/data#bm2	createtxg	110
+tank/data#bm2	creation	1700000000
