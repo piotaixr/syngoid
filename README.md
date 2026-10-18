@@ -1,3 +1,136 @@
 # syngoid
 
-syngoid is a Go rewrite of `syncoid`, the ZFS replication tool from the [sanoid project](https://github.com/jimsalterjrs/sanoid). It is licensed under the GPLv3; see [LICENSE](LICENSE). The design is described in the [spec](docs/superpowers/specs/2026-10-18-syngoid-design.md).
+syngoid is a Go rewrite of `syncoid`, the ZFS replication tool from the
+[sanoid project](https://github.com/jimsalterjrs/sanoid) by Jim Salter and contributors. It replicates ZFS datasets
+with `zfs send` / `zfs receive`. It reads and writes the same sync snapshot, hold and bookmark names as syncoid 2.2.0
+and honours the same `syncoid:sync` property, so it can take over an existing syncoid replication and hand it back.
+
+Like sanoid/syncoid, syngoid is licensed under the GNU GPL v3; see [LICENSE](LICENSE). The design is described in
+the [spec](docs/superpowers/specs/2026-10-18-syngoid-design.md).
+
+## Status: milestone 1 (local → local)
+
+This milestone replicates between datasets on the **same host** only. The full sync engine is in place: planner,
+executor, resume and remediation, recursion, clones, bookmarks, holds, pruning, preflight permission checks,
+`--dry-run` and `--confirm`.
+
+Not yet available:
+
+- remote endpoints (`[user@]host:pool/dataset`, SSH, the self-pushed agent) arrive in milestone 2. Remote arguments
+  exit with an error; the SSH and agent flags are accepted but have no effect yet;
+- `syngoid fetch`, `syngoid serve` and release downloads (milestones 2–3);
+- `--compress` only applies to network hops, so it has no effect locally.
+
+## Build
+
+The Go toolchain is pinned with [mise](https://mise.jdx.dev/) (`mise.toml`: Go 1.27.1):
+
+```sh
+mise install
+CGO_ENABLED=0 mise exec -- go build -o syngoid ./cmd/syngoid
+```
+
+With a matching Go on your `PATH`, `CGO_ENABLED=0 go build -o syngoid ./cmd/syngoid` works too. Supported targets:
+Linux, FreeBSD, illumos and macOS. Version information can be stamped with
+`-ldflags "-X github.com/piotaixr/syngoid/internal/buildinfo.Version=… -X github.com/piotaixr/syngoid/internal/buildinfo.Commit=…"`.
+
+Tests and lint:
+
+```sh
+mise exec -- go vet ./...
+mise exec -- go test -race ./...
+mise exec -- go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run
+```
+
+## Usage
+
+```
+syngoid [sync] [flags] SOURCE TARGET
+syngoid permissions [flags] SOURCE TARGET
+syngoid version
+```
+
+`sync` is the default subcommand. SOURCE and TARGET are local datasets; they must differ and neither may be inside
+the other. `syngoid --help` lists every flag.
+
+```sh
+# Replicate tank/data to backup/data (created by the first run).
+syngoid tank/data backup/data
+
+# Replicate a whole tree, skipping datasets matching a regex.
+syngoid -r --exclude-datasets='/scratch$' tank/data backup/data
+
+# Show what would happen, with size estimates, and change nothing.
+syngoid --dry-run -r tank/data backup/data
+
+# Print the plan and ask before running it (and before any destructive step).
+syngoid --confirm -r tank/data backup/data
+
+# Check the ZFS delegations these options need and print the zfs allow commands.
+syngoid permissions -r tank/data backup/data
+
+# Run zfs through sudo -n on the target only.
+syngoid --target-sudo tank/data backup/data
+```
+
+Options kept from syncoid with the same meaning include `-r/--recursive`, `--skip-parent`, `--identifier`,
+`--no-stream`, `--no-sync-snap`, `--keep-sync-snap`, `--create-bookmark`, `--use-hold`, `--preserve-recordsize`,
+`--preserve-properties`, `--no-rollback`, `--delete-target-snapshots`, `--force-delete`, `--exclude-datasets`,
+`--include-snaps`, `--exclude-snaps`, `--no-resume`, `--no-clone-handling`, `--dumpsnaps`, `--debug`, `--quiet`,
+`--sendoptions` and `--recvoptions` (same mini-syntax and allow-lists).
+
+## Differences from syncoid
+
+- **Delegation first.** syngoid never elevates privileges on its own: `zfs` runs as the invoking user and relies on
+  `zfs allow` delegations. `--sudo`, `--source-sudo` and `--target-sudo` opt in to `sudo -n zfs …`; as root no
+  checks are needed. On an unprivileged Linux target the receive uses `-u` (not mounted), and `--preserve-properties`
+  leaves out `mountpoint` and `canmount` with a warning, since those cannot be delegated on Linux.
+- **Preflight.** Before changing anything, syngoid computes the permissions the chosen options need on each side
+  and checks them. Missing grants stop the run (exit 2) with ready-to-paste `zfs allow` commands;
+  `syngoid permissions` prints that report on demand.
+- **`--dry-run` / `--confirm`.** A pure planner shows each dataset's plan with size estimates; `--confirm` asks y/N
+  before running it and before each destructive remediation, and needs a terminal.
+- **In-process data path.** No `mbuffer`, `pv` or external compressors: `--buffer-size` (default `16M`) sizes an
+  in-process buffer and `--progress=auto|bar|plain|none` replaces `--pv-options`.
+- **Renamed flags** (still accepted, with a deprecation warning): `--mbuffer-size` → `--buffer-size`,
+  `--sshoption` → `-o/--ssh-option`, `--sshconfig` → `--ssh-config`, `--sshkey=F` → `-o IdentityFile=F`,
+  `--sshport=P` → `-o Port=P`, `--sshcipher`/`-c` → `-o Ciphers=C`. Legacy `--compress` values map to
+  `zstd-fast|zstd|lz4|gzip|none`.
+- **Removed flags.** `--source-bwlimit`, `--target-bwlimit` (no bandwidth limiting), `--pv-options` (use
+  `--progress`), `--insecure-direct-connection` and `--exclude` (use `--exclude-datasets`) are errors.
+  `--no-privilege-elevation`, `--no-command-checks` and `--monitor-version` are ignored with a warning.
+- **Fixed syncoid 2.2.0 bugs** (spec §8.9): sync snapshot pruning no longer matches other hosts whose name shares a
+  prefix (`nas` vs `nas2`); the "did you `zfs create` the target?" hint is actually printed; the bookmark fallback
+  orders target snapshots by their own `createtxg`; size estimates use the send's real `-i`/`-I`; and a failure while
+  listing or resetting one dataset no longer aborts a whole recursive run.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | every dataset was replicated, had nothing to do, or was skipped (e.g. `syncoid:sync=false`) |
+| 1 | at least one soft failure (e.g. target busy with another `zfs receive`, no snapshot with `--no-sync-snap`) |
+| 2 | a critical failure: usage error, failed preflight, a dataset that could not be replicated, or cancellation |
+
+## Integration tests
+
+`test/integration` runs syngoid against real ZFS, including delegation checks as an unprivileged user and
+interoperability with Perl syncoid 2.2.0. The tests sit behind the `integration` build tag and run only on Linux
+with ZFS, as root, with `SYNGOID_IT=1`. They only touch two dedicated file-backed pools.
+
+Prepare an Ubuntu host. The script installs ZFS, creates the pools `syngoid-src` and `syngoid-dst` from sparse files
+under `/var/tmp/syngoid-it`, adds the user `syngoid-it`, and installs syncoid 2.2.0 pinned by checksum:
+
+```sh
+scripts/ci/setup-zfs.sh
+```
+
+Then run:
+
+```sh
+sudo -E env PATH=$PATH SYNGOID_IT=1 go test -tags integration -v -timeout 30m ./test/integration/...
+```
+
+Every test first destroys all children of the two test pools, and the suite refuses to run when they do not exist.
+`SYNGOID_IT_INVASIVE=1` also enables the tests that briefly change the system clock. Use it only on a throwaway
+machine or CI runner.
