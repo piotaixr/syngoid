@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -232,6 +233,28 @@ func TestMainConfirmDecline(t *testing.T) {
 	}
 	if calls := se.ep.Calls(); len(calls) != 0 {
 		t.Errorf("declined run made calls: %q", calls)
+	}
+}
+
+func TestMainConfirmDeclineCancelledExit2(t *testing.T) {
+	se := newSyncEnv(t, endpoint.HostInfo{})
+	se.StdinIsTTY = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	se.Stdin = readerFunc(func([]byte) (int, error) { cancel(); return 0, io.EOF })
+	if got := Main(ctx, []string{"--confirm", "tank/data", "backup/data"}, se.Env); got != 2 {
+		t.Fatalf("exit code = %d, want 2", got)
+	}
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
+
+func TestMainPermissionsIgnoresConfirmTTY(t *testing.T) {
+	se := newSyncEnv(t, endpoint.HostInfo{})
+	if got := se.run("permissions", "--confirm", "tank/data", "backup/data"); got != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr %q", got, se.stderr)
 	}
 }
 

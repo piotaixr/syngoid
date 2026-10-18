@@ -151,7 +151,7 @@ func newFlagSet(r *raw) *pflag.FlagSet {
 	fs.StringArrayVar(&r.excludeSnaps, "exclude-snaps", nil, "regex of snapshots to exclude (repeatable)")
 	fs.BoolVar(&r.noResume, "no-resume", false, "do not use resumable transfers")
 	fs.BoolVar(&r.noCloneHandling, "no-clone-handling", false, "do not handle clones specially")
-	fs.BoolVar(&r.dumpSnaps, "dumpsnaps", false, "print the snapshot lists and exit")
+	fs.BoolVar(&r.dumpSnaps, "dumpsnaps", false, "log the source and target snapshot lists, then continue")
 	fs.BoolVar(&r.debug, "debug", false, "debug logging")
 	fs.BoolVar(&r.quiet, "quiet", false, "only log warnings and errors")
 	fs.StringVar(&r.sendOptions, "sendoptions", "", "zfs send options, in syncoid's mini-syntax")

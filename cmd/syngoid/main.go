@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/piotaixr/syngoid/internal/app"
 	"github.com/piotaixr/syngoid/internal/endpoint"
 	"github.com/piotaixr/syngoid/internal/zfs"
@@ -71,8 +73,7 @@ func poolExists(name string) bool {
 	return false
 }
 
-// isTTY reports whether f is a character device (a terminal).
+// isTTY reports whether f is a terminal; /dev/null and pipes are not.
 func isTTY(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }

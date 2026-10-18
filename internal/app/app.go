@@ -114,7 +114,7 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	if o.Source.IsRemote() || o.Target.IsRemote() {
 		return criticalf(env, "remote endpoints are not supported yet (milestone 2)")
 	}
-	if o.Confirm && !env.StdinIsTTY {
+	if parsed.Command == cli.CmdSync && o.Confirm && !env.StdinIsTTY {
 		return criticalf(env, "--confirm requires an interactive terminal")
 	}
 	host, err := env.Hostname()
@@ -172,6 +172,9 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 		engine.RenderPlan(env.Stdout, plans, syncSnap, estimate)
 		if !p.ask("Proceed?") {
 			log.Info("aborted by user")
+			if ctx.Err() != nil {
+				return 2
+			}
 			return 0
 		}
 		confirm = p.ask
