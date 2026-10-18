@@ -15,6 +15,7 @@ const (
 	planTgt  = "backup/a"
 	planSync = "syncoid_nas_T"
 	ownOld   = "syncoid_nas_2026-01-01:00:00:00-GMT00:00"
+	ownNew   = "syncoid_nas_2026-10-18:10:00:00-GMT00:00"
 	otherOld = "syncoid_nas2_2026-01-01:00:00:00-GMT00:00"
 )
 
@@ -217,6 +218,41 @@ func TestPlan(t *testing.T) {
 			want: []Action{SendFromBookmark{Bookmark: "bm", To: planSync}},
 		},
 		{
+			name: "bookmark fallback no-sync-snap next is newest",
+			state: func(s *DatasetState) {
+				s.SourceSnaps = []zfs.Snapshot{snapA, snapB}
+				s.NewSyncSnap = ""
+				s.TargetExists = true
+				s.TargetSnaps = []zfs.Snapshot{{Name: "x", GUID: "gx", CreateTxg: 5}}
+				s.SourceBookmarks = []zfs.Bookmark{bmX}
+			},
+			opts: func(o *PlanOptions) { o.NoSyncSnap = true },
+			want: []Action{SendFromBookmark{Bookmark: "bm", To: "b"}},
+		},
+		{
+			name: "bookmark fallback no-sync-snap next is newest with post-actions",
+			state: func(s *DatasetState) {
+				s.SourceSnaps = []zfs.Snapshot{snapA, snapB}
+				s.NewSyncSnap = ""
+				s.TargetExists = true
+				s.TargetSnaps = []zfs.Snapshot{{Name: "x", GUID: "gx", CreateTxg: 5}}
+				s.SourceBookmarks = []zfs.Bookmark{bmX}
+			},
+			opts: func(o *PlanOptions) {
+				o.NoSyncSnap = true
+				o.CreateBookmark = true
+				o.UseHold = true
+			},
+			want: []Action{
+				SendFromBookmark{Bookmark: "bm", To: "b"},
+				Hold{Side: Source, Snap: "b"},
+				Release{Side: Source, Snap: "x"},
+				Hold{Side: Target, Snap: "b"},
+				Release{Side: Target, Snap: "x"},
+				CreateBookmark{Snap: "b"},
+			},
+		},
+		{
 			name: "no match",
 			state: func(s *DatasetState) {
 				s.TargetExists = true
@@ -343,6 +379,20 @@ func TestPlan(t *testing.T) {
 			},
 			want: []Action{
 				SendIncremental{From: ownOld, To: planSync, Intermediates: true},
+				PruneSyncSnaps{Side: Source, Snaps: []string{ownOld}},
+				PruneSyncSnaps{Side: Target, Snaps: []string{ownOld}},
+			},
+		},
+		{
+			name: "prune excludes the new sync snapshot",
+			state: func(s *DatasetState) {
+				s.NewSyncSnap = ownNew
+				s.SourceSnaps = []zfs.Snapshot{snapA, {Name: ownOld, GUID: "go", CreateTxg: 40}, {Name: ownNew, GUID: "gw", CreateTxg: 60}}
+				s.TargetExists = true
+				s.TargetSnaps = []zfs.Snapshot{snapA, {Name: ownOld, GUID: "go", CreateTxg: 40}}
+			},
+			want: []Action{
+				SendIncremental{From: ownOld, To: ownNew, Intermediates: true},
 				PruneSyncSnaps{Side: Source, Snaps: []string{ownOld}},
 				PruneSyncSnaps{Side: Target, Snaps: []string{ownOld}},
 			},
