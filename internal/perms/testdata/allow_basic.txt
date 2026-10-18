@@ -1,0 +1,13 @@
+---- Permissions on tank/backups/vm ----------------------------------
+Local permissions:
+	user backup hold
+---- Permissions on tank/backups -------------------------------------
+Permission sets:
+	@recv create,mount,receive
+Local permissions:
+	user backup snapshot
+Descendent permissions:
+	group zfsadm destroy
+Local+Descendent permissions:
+	user backup @recv,release
+	everyone bookmark

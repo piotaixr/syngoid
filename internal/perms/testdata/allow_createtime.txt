@@ -1,0 +1,5 @@
+---- Permissions on tank/data ----------------------------------------
+Create time permissions:
+	create,mount,snapshot
+Local+Descendent permissions:
+	user backup send
