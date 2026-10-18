@@ -48,7 +48,8 @@ type Executor struct {
 // one Result per state in the same order. It first excludes busy targets,
 // creates the sync snapshots in one batch per pool, refreshes and re-plans
 // every dataset, then runs the datasets sequentially in dependency order.
-// A dataset whose dependency failed is skipped as a soft failure. After ctx
+// A dataset whose dependency ended other than ok or nothing to do is
+// skipped as a soft failure. After ctx
 // is cancelled no new action starts and every unfinished dataset ends
 // critical with message "cancelled".
 func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan) []Result {
@@ -86,7 +87,8 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 		if !r.done[i] {
 			r.runOne(ctx, i, deps[i], failed)
 		}
-		failed[i] = failed[i] || r.results[i].Status == StatusCritical
+		st := r.results[i].Status
+		failed[i] = st != StatusOK && st != StatusNothing
 	}
 	return r.results
 }
@@ -109,7 +111,6 @@ func (r *runState) runOne(ctx context.Context, i int, deps []int, failed []bool)
 	for _, d := range deps {
 		if failed[d] {
 			r.finish(i, StatusSoft, "skipped: dependency "+r.states[d].Source+" failed", nil)
-			failed[i] = true
 			return
 		}
 	}
@@ -154,6 +155,9 @@ func (r *runState) checkBusy(ctx context.Context) {
 		targets[k] = r.states[i].Target
 	}
 	busy, err := r.e.Dst.ReceiveBusy(ctx, targets)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		r.e.Log.Warn("cannot check for running zfs receive processes: " + err.Error())
 		return
@@ -163,6 +167,13 @@ func (r *runState) checkBusy(ctx context.Context) {
 			r.finish(i, StatusSoft, busyMessage(t), nil)
 		}
 	}
+}
+
+// vanished ends dataset i as skipped because its source no longer exists.
+func (r *runState) vanished(i int) {
+	msg := vanishedMessage(r.states[i].Source)
+	r.e.Log.Warn(msg)
+	r.finish(i, StatusSkipped, msg, nil)
 }
 
 func busyMessage(target string) string {
@@ -204,7 +215,12 @@ func (r *runState) createSyncSnaps(ctx context.Context) {
 		}
 		r.e.Log.Debug("creating sync snapshots in one batch failed, retrying per dataset: " + err.Error())
 		for _, en := range es {
-			if err := r.e.Src.Snapshot(ctx, []string{en.name}); err != nil && ctx.Err() == nil {
+			err := r.e.Src.Snapshot(ctx, []string{en.name})
+			switch {
+			case err == nil || ctx.Err() != nil:
+			case errors.Is(err, zfs.ErrNoDataset):
+				r.vanished(en.i)
+			default:
 				r.finish(en.i, StatusCritical, fmt.Sprintf("creating sync snapshot %s failed: %v", en.name, err), err)
 			}
 		}
@@ -224,7 +240,11 @@ func (r *runState) refresh(ctx context.Context) {
 	}
 	if err != nil {
 		for _, i := range idx {
-			r.finish(i, StatusCritical, "refreshing dataset state failed: "+err.Error(), err)
+			if errors.Is(err, zfs.ErrNoDataset) { // only the source root can be missing
+				r.vanished(i)
+			} else {
+				r.finish(i, StatusCritical, "refreshing dataset state failed: "+err.Error(), err)
+			}
 		}
 		return
 	}
@@ -235,9 +255,7 @@ func (r *runState) refresh(ctx context.Context) {
 	for _, i := range idx {
 		s, ok := bySource[r.states[i].Source]
 		if !ok {
-			msg := vanishedMessage(r.states[i].Source)
-			r.e.Log.Warn(msg)
-			r.finish(i, StatusSkipped, msg, nil)
+			r.vanished(i)
 			continue
 		}
 		s = stripSyncSnap(s)
@@ -372,14 +390,8 @@ func (d *dsRun) vanished() step {
 
 // send runs one send action, checking first that the target is not busy.
 func (d *dsRun) send(ctx context.Context, a Action) step {
-	if !d.busyChecked {
-		d.busyChecked = true
-		busy, err := d.e.Dst.ReceiveBusy(ctx, []string{d.st.Target})
-		if err != nil {
-			d.e.Log.Warn("cannot check for running zfs receive processes: " + err.Error())
-		} else if busy[d.st.Target] {
-			return d.end(StatusSoft, busyMessage(d.st.Target), nil)
-		}
+	if stop, ok := d.checkBusy(ctx); !ok {
+		return stop
 	}
 	n, err := d.e.transfer(ctx, d.st, a)
 	d.res.Bytes += n
@@ -396,9 +408,39 @@ func (d *dsRun) send(ctx context.Context, a Action) step {
 	return d.remediate(ctx, a, err)
 }
 
+// checkBusy checks once per dataset, before the first send or destroy,
+// that the target is not being received into. ok is false when the dataset
+// ended (busy or cancelled).
+func (d *dsRun) checkBusy(ctx context.Context) (step, bool) {
+	if d.busyChecked {
+		return stepNext, true
+	}
+	d.busyChecked = true
+	busy, err := d.e.Dst.ReceiveBusy(ctx, []string{d.st.Target})
+	switch {
+	case ctx.Err() != nil:
+		return d.end(StatusCritical, msgCancelled, ctx.Err()), false
+	case err != nil:
+		d.e.Log.Warn("cannot check for running zfs receive processes: " + err.Error())
+	case busy[d.st.Target]:
+		return d.end(StatusSoft, busyMessage(d.st.Target), nil), false
+	}
+	return stepNext, true
+}
+
 // forceDestroy destroys the target recursively, after confirmation, and
-// re-plans; the sync snapshot already exists, so none is created.
+// re-plans; the sync snapshot already exists, so none is created. It never
+// destroys a pool root, a busy target, or once the re-plan budget is spent.
 func (d *dsRun) forceDestroy(ctx context.Context) step {
+	if d.st.TargetIsPoolRoot {
+		return d.fail(ForceDestroyTarget{}, errors.New("refusing to destroy pool root dataset "+d.st.Target))
+	}
+	if d.rounds >= maxReplans {
+		return d.giveUp(nil)
+	}
+	if stop, ok := d.checkBusy(ctx); !ok {
+		return stop
+	}
 	if d.e.Confirm != nil && !d.e.Confirm("Destroy "+d.st.Target+" recursively (--force-delete)?") {
 		return d.end(StatusCritical, msgDeclined, nil)
 	}

@@ -131,6 +131,29 @@ func TestExecutorDestinationExistsForceDelete(t *testing.T) {
 			t.Errorf("target snaps %v, want %v", got, want)
 		}
 	})
+	t.Run("force delete declined", func(t *testing.T) {
+		env := setup(t)
+		env.opts.ForceDelete = true
+		var asked []string
+		env.confirm = func(q string) bool {
+			asked = append(asked, q)
+			return false
+		}
+		res := env.run(ts)
+		wantStatuses(t, res, StatusCritical)
+		if res[0].Message != "destructive action declined" {
+			t.Errorf("message %q", res[0].Message)
+		}
+		if want := []string{"Destroy conflicting backup/data@x (--force-delete)?"}; !eqStrings(asked, want) {
+			t.Errorf("asked %q, want %q", asked, want)
+		}
+		if n := countPrefix(env.dst.Calls(), "Destroy"); n != 0 {
+			t.Errorf("%d Destroy calls", n)
+		}
+		if got := dsSnaps(env.tw, "backup/data"); !eqStrings(got, []string{"x", "a"}) {
+			t.Errorf("target snaps %v", got)
+		}
+	})
 	t.Run("without force delete", func(t *testing.T) {
 		env := setup(t)
 		res := env.run(ts)
@@ -321,4 +344,183 @@ func TestExecutorRemediationBound(t *testing.T) {
 	if stuck.aborts != 3 {
 		t.Errorf("%d aborts, want 3", stuck.aborts)
 	}
+}
+
+// noopDestroy pretends every snapshot destroy succeeds.
+type noopDestroy struct {
+	*fake.Endpoint
+	mu        sync.Mutex
+	destroyed []string
+}
+
+func (n *noopDestroy) Destroy(_ context.Context, ds string, snaps []string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.destroyed = append(n.destroyed, ds+"@"+strings.Join(snaps, ","))
+	return nil
+}
+
+func TestExecutorRemediationBoundMixedKinds(t *testing.T) {
+	// Every receive fails with a conflicting destination (and leaves a resume
+	// token), every resume fails because its source is gone: the rounds
+	// alternate destroy-conflict and abort-resume and still stop at 3.
+	env := seededEnv(t)
+	env.opts.ForceDelete = true
+	nd := &noopDestroy{Endpoint: env.dst}
+	env.dstEP = nd
+	env.dst.Faults.Receive = func(zfs.RecvSpec) error {
+		return zfsErr("cannot restore to backup/data@x: destination already exists")
+	}
+	env.src.Faults.Send = func(s zfs.SendSpec) error {
+		if s.ResumeToken != "" {
+			return zfsErr("cannot resume send: 'tank/data@b' used in the initial send no longer exists")
+		}
+		return nil
+	}
+	res := env.run(syncName(10))
+	wantStatuses(t, res, StatusCritical)
+	if want := "giving up after 3 re-plan rounds: "; !strings.HasPrefix(res[0].Message, want) {
+		t.Errorf("message %q, want prefix %q", res[0].Message, want)
+	}
+	if !errors.Is(res[0].Err, zfs.ErrResumeSourceGone) {
+		t.Errorf("last error %v, want ErrResumeSourceGone", res[0].Err)
+	}
+	if want := []string{"backup/data@x", "backup/data@x"}; !eqStrings(nd.destroyed, want) {
+		t.Errorf("destroyed %q, want %q", nd.destroyed, want)
+	}
+	if n := countPrefix(env.dst.Calls(), "AbortResume"); n != 1 {
+		t.Errorf("%d AbortResume calls, want 1", n)
+	}
+	if n := countPrefix(env.src.Calls(), "Send tok-"); n != 2 {
+		t.Errorf("%d resume sends, want 2", n)
+	}
+}
+
+func TestExecutorForceDestroyGuards(t *testing.T) {
+	ts := syncName(10)
+	// run executes the ForceDestroyTarget plan directly on a dsRun prepared
+	// by mutate, so the guards are reached in states Run cannot easily set up.
+	run := func(env *execEnv, mutate func(d *dsRun)) Result {
+		states, plans := env.plan(ts)
+		if len(plans[0].Actions) != 1 || plans[0].Actions[0] != (ForceDestroyTarget{}) {
+			t.Fatalf("plan %+v", plans[0])
+		}
+		d := &dsRun{e: env.executor(ts), st: states[0], plan: plans[0], res: Result{Source: "tank/data", Target: "backup/data"}}
+		mutate(d)
+		d.run(context.Background())
+		return d.res
+	}
+	t.Run("budget exhausted", func(t *testing.T) {
+		env := conflictingTarget(t)
+		res := run(env, func(d *dsRun) { d.rounds = maxReplans })
+		if res.Status != StatusCritical || res.Message != "giving up after 3 re-plan rounds" {
+			t.Errorf("result %v %q", res.Status, res.Message)
+		}
+		wantCalls(t, "target", env.dst.Calls(), nil)
+	})
+	t.Run("busy target", func(t *testing.T) {
+		env := conflictingTarget(t)
+		env.dst.Faults.Busy = map[string]bool{"backup/data": true}
+		res := run(env, func(*dsRun) {})
+		if res.Status != StatusSoft || res.Message != busyMessage("backup/data") {
+			t.Errorf("result %v %q", res.Status, res.Message)
+		}
+		wantCalls(t, "target", env.dst.Calls(), nil)
+	})
+	t.Run("pool root", func(t *testing.T) {
+		env := conflictingTarget(t)
+		res := run(env, func(d *dsRun) { d.st.TargetIsPoolRoot = true })
+		if res.Status != StatusCritical || !strings.Contains(res.Message, "refusing to destroy pool root dataset backup/data") {
+			t.Errorf("result %v %q", res.Status, res.Message)
+		}
+		wantCalls(t, "target", env.dst.Calls(), nil)
+	})
+}
+
+// cancellingBusy cancels the run during its at-th ReceiveBusy call.
+type cancellingBusy struct {
+	*fake.Endpoint
+	cancel context.CancelFunc
+	at, n  int
+}
+
+func (c *cancellingBusy) ReceiveBusy(ctx context.Context, ds []string) (map[string]bool, error) {
+	c.n++
+	if c.n == c.at {
+		c.cancel()
+		return nil, ctx.Err()
+	}
+	return c.Endpoint.ReceiveBusy(ctx, ds)
+}
+
+func TestExecutorCancelDuringBusyCheck(t *testing.T) {
+	ts := syncName(10)
+	tests := []struct {
+		name      string
+		at        int
+		wantSrc   []string
+		situation string
+	}{
+		{"batch check", 1, nil, "before the sync snapshots"},
+		{"per-dataset check", 2, []string{"Snapshot tank/data@" + ts}, "before the first send"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newExecEnv(t, "tank/data", "backup/data")
+			env.sw.Create("tank", "")
+			env.sw.Create("tank/data", "")
+			env.sw.Snap("tank/data", "a")
+			env.tw.Create("backup", "")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			env.dstEP = &cancellingBusy{Endpoint: env.dst, cancel: cancel, at: tt.at}
+			states, plans := env.plan(ts)
+			res := env.exec(ctx, ts, states, plans)
+			wantStatuses(t, res, StatusCritical)
+			if res[0].Message != "cancelled" {
+				t.Errorf("message %q, want cancelled (%s)", res[0].Message, tt.situation)
+			}
+			if w := env.logs.at(slog.LevelWarn); len(w) > 0 {
+				t.Errorf("unexpected warnings %q", w)
+			}
+			wantCalls(t, "source", env.src.Calls(), tt.wantSrc)
+			wantCalls(t, "target", env.dst.Calls(), nil)
+		})
+	}
+}
+
+func TestExecutorSourceVanishedBeforeRun(t *testing.T) {
+	t.Run("before the sync snapshots", func(t *testing.T) {
+		ts := syncName(10)
+		env := threeDatasets(t)
+		states, plans := env.plan(ts)
+		if err := fake.New(env.sw, endpoint.HostInfo{}).DestroyDataset(context.Background(), "tank/data/b", true); err != nil {
+			t.Fatal(err)
+		}
+		res := env.exec(context.Background(), ts, states, plans)
+		wantStatuses(t, res, StatusOK, StatusOK, StatusSkipped)
+		want := "Skipping dataset (dataset no longer exists): tank/data/b..."
+		if res[2].Message != want || !containsMsg(env.logs.at(slog.LevelWarn), want) {
+			t.Errorf("message %q, warnings %q; want %q", res[2].Message, env.logs.at(slog.LevelWarn), want)
+		}
+	})
+	t.Run("before the refresh", func(t *testing.T) {
+		env := newExecEnv(t, "tank/data", "backup/data")
+		env.opts.NoSyncSnap = true
+		env.sw.Create("tank", "")
+		env.sw.Create("tank/data", "")
+		env.sw.Snap("tank/data", "a")
+		env.tw.Create("backup", "")
+		states, plans := env.plan("")
+		if err := fake.New(env.sw, endpoint.HostInfo{}).DestroyDataset(context.Background(), "tank/data", true); err != nil {
+			t.Fatal(err)
+		}
+		res := env.exec(context.Background(), "", states, plans)
+		wantStatuses(t, res, StatusSkipped)
+		want := "Skipping dataset (dataset no longer exists): tank/data..."
+		if res[0].Message != want || !containsMsg(env.logs.at(slog.LevelWarn), want) {
+			t.Errorf("message %q, warnings %q; want %q", res[0].Message, env.logs.at(slog.LevelWarn), want)
+		}
+		wantCalls(t, "target", env.dst.Calls(), nil)
+	})
 }

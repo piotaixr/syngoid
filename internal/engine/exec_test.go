@@ -100,8 +100,8 @@ func (e *execEnv) plan(syncSnap string) ([]DatasetState, []Plan) {
 	return states, plans
 }
 
-func (e *execEnv) exec(ctx context.Context, syncSnap string, states []DatasetState, plans []Plan) []Result {
-	ex := &Executor{
+func (e *execEnv) executor(syncSnap string) *Executor {
+	return &Executor{
 		Src: e.srcEP, Dst: e.dstEP, Opts: e.opts,
 		PlanOpts:  PlanOptionsFrom(e.opts, "nas"),
 		Log:       slog.New(e.logs),
@@ -110,7 +110,10 @@ func (e *execEnv) exec(ctx context.Context, syncSnap string, states []DatasetSta
 		SendCodec: stream.None, RecvCodec: stream.None,
 		SyncSnap: syncSnap,
 	}
-	return ex.Run(ctx, states, plans)
+}
+
+func (e *execEnv) exec(ctx context.Context, syncSnap string, states []DatasetState, plans []Plan) []Result {
+	return e.executor(syncSnap).Run(ctx, states, plans)
 }
 
 func (e *execEnv) run(syncSnap string) []Result {
@@ -362,27 +365,49 @@ func TestExecutorCancelMidTransfer(t *testing.T) {
 }
 
 func TestExecutorDependencySkip(t *testing.T) {
-	env := newExecEnv(t, "tank", "backup")
-	env.opts.Recursive, env.opts.SkipParent = true, true
-	env.sw.Create("tank", "")
-	for _, ds := range []string{"tank/data", "tank/data/a", "tank/other"} {
-		env.sw.Create(ds, "")
-		env.sw.Snap(ds, "s1")
+	tests := []struct {
+		name   string
+		setup  func(env *execEnv)
+		parent Status
+	}{
+		{"critical parent", func(env *execEnv) {
+			env.src.Faults.Send = func(s zfs.SendSpec) error {
+				if s.Dataset == "tank/data" {
+					return errors.New("injected send failure")
+				}
+				return nil
+			}
+		}, StatusCritical},
+		{"busy parent", func(env *execEnv) {
+			env.dst.Faults.Busy = map[string]bool{"backup/data": true}
+		}, StatusSoft},
+		{"parent skipped by property", func(env *execEnv) {
+			env.sw.SetProp("tank/data", "syncoid:sync", "false")
+		}, StatusSkipped},
 	}
-	env.tw.Create("backup", "")
-	env.src.Faults.Send = func(s zfs.SendSpec) error {
-		if s.Dataset == "tank/data" {
-			return errors.New("injected send failure")
-		}
-		return nil
-	}
-	res := env.run(syncName(10))
-	wantStatuses(t, res, StatusCritical, StatusSoft, StatusOK)
-	if want := "skipped: dependency tank/data failed"; res[1].Message != want {
-		t.Errorf("message %q, want %q", res[1].Message, want)
-	}
-	if n := countPrefix(env.src.Calls(), "Send tank/data/a@"); n != 0 {
-		t.Errorf("dependent dataset was sent %d times", n)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newExecEnv(t, "tank", "backup")
+			env.opts.Recursive, env.opts.SkipParent = true, true
+			env.sw.Create("tank", "")
+			for _, ds := range []string{"tank/data", "tank/data/a", "tank/other"} {
+				env.sw.Create(ds, "")
+				env.sw.Snap(ds, "s1")
+			}
+			env.tw.Create("backup", "")
+			tt.setup(env)
+			res := env.run(syncName(10))
+			wantStatuses(t, res, tt.parent, StatusSoft, StatusOK)
+			if want := "skipped: dependency tank/data failed"; res[1].Message != want {
+				t.Errorf("message %q, want %q", res[1].Message, want)
+			}
+			if n := countPrefix(env.src.Calls(), "Send tank/data/a@"); n != 0 {
+				t.Errorf("dependent dataset was sent %d times", n)
+			}
+			if n := countPrefix(env.dst.Calls(), "Receive backup/data/a"); n != 0 {
+				t.Errorf("dependent dataset was received %d times", n)
+			}
+		})
 	}
 }
 
@@ -463,7 +488,7 @@ func TestExecutorWarningsOnly(t *testing.T) {
 
 var errInjected = errors.New("injected failure")
 
-// failingMutations fails every hold, release, snapshot destroy and bookmark.
+// failingMutations fails every hold, release and snapshot destroy.
 type failingMutations struct{ *fake.Endpoint }
 
 func (failingMutations) Hold(context.Context, string, string) error      { return errInjected }
