@@ -51,6 +51,20 @@ func TestConsoleQuiet(t *testing.T) {
 	}
 }
 
+func TestConsoleQuietDebug(t *testing.T) {
+	l, stdout, stderr := newBufLogger(logx.Config{Quiet: true, Debug: true})
+	l.Debug("d")
+	l.Info("hello")
+	l.Warn("w")
+	logx.Critical(l, "c")
+	if got, want := stdout.String(), "DEBUG: d\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), "CRITICAL ERROR: c\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+}
+
 func TestConsoleHostPrefix(t *testing.T) {
 	l, stdout, _ := newBufLogger(logx.Config{Debug: true})
 	l.Debug("zfs list", logx.KeyHost, "backup@nas", logx.KeyDataset, "tank/a", logx.KeyAction, "list")

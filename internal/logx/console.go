@@ -24,9 +24,10 @@ const (
 type Config struct {
 	// Stdout receives Debug and Info messages; Stderr receives Warn and Critical ones.
 	Stdout, Stderr io.Writer
-	// Quiet suppresses everything below Critical.
+	// Quiet suppresses Info and Warn messages.
 	Quiet bool
-	// Debug enables Debug messages.
+	// Debug enables Debug messages, even with Quiet (syncoid prints DEBUG
+	// under --quiet too).
 	Debug bool
 }
 
@@ -50,6 +51,7 @@ type console struct {
 	stdout io.Writer
 	stderr io.Writer
 	min    slog.Level
+	debug  bool
 	host   string
 }
 
@@ -61,10 +63,12 @@ func newConsole(cfg Config) *console {
 	case cfg.Debug:
 		minLevel = slog.LevelDebug
 	}
-	return &console{mu: &sync.Mutex{}, stdout: cfg.Stdout, stderr: cfg.Stderr, min: minLevel}
+	return &console{mu: &sync.Mutex{}, stdout: cfg.Stdout, stderr: cfg.Stderr, min: minLevel, debug: cfg.Debug}
 }
 
-func (c *console) Enabled(_ context.Context, l slog.Level) bool { return l >= c.min }
+func (c *console) Enabled(_ context.Context, l slog.Level) bool {
+	return l >= c.min || (c.debug && l < slog.LevelInfo)
+}
 
 func (c *console) Handle(_ context.Context, r slog.Record) error {
 	host := c.host

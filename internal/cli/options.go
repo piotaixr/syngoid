@@ -71,6 +71,15 @@ type Parsed struct {
 	Warnings []string
 }
 
+// ErrHelp is returned by Parse when -h or --help was given.
+var ErrHelp = pflag.ErrHelp
+
+// Usage returns the flag descriptions for the help text.
+func Usage() string {
+	var r raw
+	return newFlagSet(&r).FlagUsages()
+}
+
 var subcommands = map[string]Command{
 	"sync":        CmdSync,
 	"permissions": CmdPermissions,
