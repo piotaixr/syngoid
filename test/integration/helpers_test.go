@@ -211,30 +211,48 @@ func syngoidAs(t *testing.T, user string, args ...string) result {
 func runSyngoid(t *testing.T, user string, args ...string) result {
 	t.Helper()
 	cmd := syngoidCmd(user, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
+	r, err := runCmd(cmd)
 	lastEnd = time.Now()
-	r := result{stdout: stdout.String(), stderr: stderr.String()}
-	var ee *exec.ExitError
-	switch {
-	case err == nil:
-	case errors.As(err, &ee):
-		r.code = ee.ExitCode()
-	default:
+	if err != nil {
 		t.Fatalf("running syngoid: %v", err)
 	}
 	logResult(t, user, args, r)
 	return r
 }
 
-// syngoidCmd prepares a syngoid command, first waiting for a wall clock
-// second later than the one the previous run ended in, so this run's sync
-// snapshot name (second resolution) differs from the previous one's.
-func syngoidCmd(user string, args ...string) *exec.Cmd {
+// runCmd runs cmd to completion and returns its outcome. The error is
+// non-nil only when the process could not be run to an exit status; a
+// non-zero exit is reported in result.code. It touches no shared state, so
+// it can run in a goroutine.
+func runCmd(cmd *exec.Cmd) (result, error) {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	r := result{stdout: stdout.String(), stderr: stderr.String()}
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return r, nil
+	case errors.As(err, &ee):
+		r.code = ee.ExitCode()
+		return r, nil
+	}
+	return r, err
+}
+
+// waitNextSecond waits for a wall clock second later than the one the
+// previous run ended in, so the next run's sync snapshot name (second
+// resolution) differs from the previous one's.
+func waitNextSecond() {
 	for time.Now().Unix() <= lastEnd.Unix() {
 		time.Sleep(time.Until(time.Unix(lastEnd.Unix()+1, 0)))
 	}
+}
+
+// syngoidCmd prepares a syngoid command, first waiting for a later wall
+// clock second than the previous run ended in (see waitNextSecond).
+func syngoidCmd(user string, args ...string) *exec.Cmd {
+	waitNextSecond()
 	var cmd *exec.Cmd
 	if user == "" {
 		cmd = exec.Command(binPath, args...)
@@ -247,11 +265,17 @@ func syngoidCmd(user string, args ...string) *exec.Cmd {
 
 func logResult(t *testing.T, user string, args []string, r result) {
 	t.Helper()
+	logTool(t, user, "syngoid", args, r)
+}
+
+// logTool logs the outcome of one run of tool by user ("" for root).
+func logTool(t *testing.T, user, tool string, args []string, r result) {
+	t.Helper()
 	who := "root"
 	if user != "" {
 		who = user
 	}
-	t.Logf("[%s] syngoid %s → exit %d\n--- stdout:\n%s--- stderr:\n%s", who, strings.Join(args, " "), r.code, r.stdout, r.stderr)
+	t.Logf("[%s] %s %s → exit %d\n--- stdout:\n%s--- stderr:\n%s", who, tool, strings.Join(args, " "), r.code, r.stdout, r.stderr)
 }
 
 // zfs runs zfs as root and returns its trimmed stdout, failing the test on
