@@ -23,6 +23,10 @@ const (
 // barThrottle is the minimum interval between two bar redraws.
 const barThrottle = 200 * time.Millisecond
 
+// maxETASeconds caps the displayed ETA at 99999:59:59 and keeps the Duration
+// conversion from overflowing when the rate is tiny.
+const maxETASeconds = 99999*3600 + 3599
+
 // Renderer reports the progress of one transfer. It replaces syncoid's pv.
 type Renderer interface {
 	// Start begins a transfer labelled label. estimate is the expected total
@@ -125,7 +129,7 @@ func (b *barRenderer) draw(done int64, elapsed time.Duration, tail string) {
 		}
 		var eta time.Duration
 		if remaining := b.estimate - done; r > 0 && remaining > 0 {
-			eta = time.Duration(math.Round(float64(remaining)/r)) * time.Second
+			eta = time.Duration(math.Min(math.Round(float64(remaining)/r), maxETASeconds)) * time.Second
 		}
 		line = fmt.Sprintf("\r%s  %3d%%  %s/%s  %s  ETA %s\x1b[K",
 			b.label, pct, HumanBytes(done), HumanBytes(b.estimate), rateStr, HumanDuration(eta))
@@ -145,6 +149,7 @@ func rate(bytes int64, elapsed time.Duration) float64 {
 }
 
 // HumanBytes formats n using binary units, with one decimal above 1023 bytes.
+// The unit is chosen after rounding, so 1048575 prints "1.0 MiB".
 func HumanBytes(n int64) string {
 	if n < 1024 {
 		return fmt.Sprintf("%d B", n)
@@ -152,7 +157,7 @@ func HumanBytes(n int64) string {
 	units := []string{"KiB", "MiB", "GiB", "TiB"}
 	v := float64(n) / 1024
 	i := 0
-	for v >= 1024 && i < len(units)-1 {
+	for math.Round(v*10)/10 >= 1024 && i < len(units)-1 {
 		v /= 1024
 		i++
 	}

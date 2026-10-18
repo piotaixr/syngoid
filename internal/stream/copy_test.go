@@ -97,23 +97,19 @@ func TestCopyWriterError(t *testing.T) {
 	src := &endlessReader{}
 	dst := &failAfterWriter{limit: 1 << 20, err: boom}
 
-	_, err := Copy(context.Background(), dst, src, 1<<20)
+	readerExited := make(chan struct{})
+	_, err := copyQueued(context.Background(), dst, src, 1<<20, func() { close(readerExited) })
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want boom", err)
 	}
 
-	// The reader must stop: its read count settles.
-	deadline := time.Now().Add(2 * time.Second)
-	prev := int64(-1)
-	for time.Now().Before(deadline) {
-		cur := src.reads.Load()
-		if cur == prev {
-			return
-		}
-		prev = cur
-		time.Sleep(50 * time.Millisecond)
+	// The reader is blocked on a full queue when the writer fails; it must
+	// notice the stop signal and exit.
+	select {
+	case <-readerExited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reader goroutine did not exit after writer error")
 	}
-	t.Fatal("reader kept reading after writer error")
 }
 
 func TestCopyReaderError(t *testing.T) {
@@ -132,3 +128,33 @@ func TestCopyReaderError(t *testing.T) {
 type errReader struct{ err error }
 
 func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+func TestCopyCancelStopsReader(t *testing.T) {
+	src := &endlessReader{}
+	ctx, cancel := context.WithCancel(context.Background())
+	// A writer that blocks until cancelled lets the queue fill up.
+	dst := writerFunc(func(p []byte) (int, error) {
+		<-ctx.Done()
+		return len(p), nil
+	})
+	readerExited := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := copyQueued(ctx, dst, src, 1<<20, func() { close(readerExited) })
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	select {
+	case <-readerExited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reader goroutine did not exit after cancel")
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

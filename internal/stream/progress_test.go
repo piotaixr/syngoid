@@ -16,6 +16,7 @@ func TestHumanBytes(t *testing.T) {
 		512:        "512 B",
 		1023:       "1023 B",
 		1024:       "1.0 KiB",
+		1048575:    "1.0 MiB",
 		1288490189: "1.2 GiB",
 		5 << 40:    "5.0 TiB",
 	}
@@ -181,5 +182,22 @@ func TestAutoMode(t *testing.T) {
 	}
 	if _, ok := NewRenderer(ProgressAuto, &out, false, log).(*plainRenderer); !ok {
 		t.Error("auto off a TTY should be plain")
+	}
+}
+
+func TestBarETAClamped(t *testing.T) {
+	var buf bytes.Buffer
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	r := newTestBar(&buf, clk)
+	r.Start("x", 1<<62)
+	clk.advance(time.Hour)
+	r.Update(1) // tiny rate, enormous remainder
+	if seg := lastSegment(buf.String()); !strings.Contains(seg, "ETA 99999:59:59") {
+		t.Errorf("segment %q: ETA not clamped", seg)
+	}
+	buf.Reset()
+	r.Finish(1<<62+5, time.Second, nil) // done beyond estimate
+	if seg := lastSegment(buf.String()); !strings.Contains(seg, "ETA 0:00:00") {
+		t.Errorf("segment %q: ETA should be 0", seg)
 	}
 }

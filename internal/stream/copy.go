@@ -27,8 +27,18 @@ type chunk struct {
 //
 // The reader goroutine stops after any error, but a src.Read that blocks
 // forever cannot be interrupted: Copy still returns on cancellation, and that
-// goroutine lives until the Read returns.
+// goroutine lives until the Read returns. Likewise a blocking dst.Write cannot
+// be interrupted, so cancellation is only observed between writes.
+//
+// Peak memory is bufferSize plus up to two in-flight 128 KiB chunks (one being
+// read, one being written).
 func Copy(ctx context.Context, dst io.Writer, src io.Reader, bufferSize int64) (int64, error) {
+	return copyQueued(ctx, dst, src, bufferSize, nil)
+}
+
+// copyQueued implements Copy. readerExit, when non-nil, is called as the
+// reader goroutine returns; tests use it to observe that the reader stops.
+func copyQueued(ctx context.Context, dst io.Writer, src io.Reader, bufferSize int64, readerExit func()) (int64, error) {
 	depth := int(bufferSize / chunkSize)
 	if depth < 1 {
 		depth = 1
@@ -38,7 +48,12 @@ func Copy(ctx context.Context, dst io.Writer, src io.Reader, bufferSize int64) (
 	stop := make(chan struct{})
 	defer close(stop)
 
-	go readLoop(src, queue, free, stop)
+	go func() {
+		if readerExit != nil {
+			defer readerExit()
+		}
+		readLoop(src, queue, free, stop)
+	}()
 
 	var written int64
 	for {
@@ -74,6 +89,11 @@ func Copy(ctx context.Context, dst io.Writer, src io.Reader, bufferSize int64) (
 // included, queued as the final chunk) or until stop is closed.
 func readLoop(src io.Reader, queue chan<- chunk, free chan []byte, stop <-chan struct{}) {
 	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
 		var buf []byte
 		select {
 		case buf = <-free:
