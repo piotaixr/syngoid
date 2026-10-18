@@ -38,7 +38,7 @@ type Delegations struct {
 	sections []section
 }
 
-var headerRe = regexp.MustCompile(`^---- Permissions on (.+?) -+\s*$`)
+var headerRe = regexp.MustCompile(`^---- Permissions on (.+?)(?: -+)?\s*$`)
 
 const (
 	subNone = iota // before any subsection header
@@ -65,6 +65,9 @@ func ParseAllow(out string) (Delegations, error) {
 			continue
 		}
 		if line[0] != '\t' {
+			if strings.HasPrefix(line, "---- ") || !strings.HasSuffix(line, ":") {
+				return Delegations{}, fmt.Errorf("zfs allow: line %d: unrecognized line: %q", i+1, line)
+			}
 			switch strings.TrimSuffix(line, ":") {
 			case "Permission sets":
 				sub = subSets

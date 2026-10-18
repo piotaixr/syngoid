@@ -169,3 +169,50 @@ func FuzzParseAllow(f *testing.F) {
 		Effective(d, "tank/x", "u", []string{"g"})
 	})
 }
+
+func TestHeaderWithoutDashes(t *testing.T) {
+	out := "---- Permissions on tank/a\nLocal permissions:\n\tuser u send\n" +
+		"---- Permissions on tank/a/b\nLocal permissions:\n\tuser u hold\n"
+	d, err := ParseAllow(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Effective(d, "tank/a", "u", nil); keys(got) != "send" {
+		t.Errorf("tank/a: got %s, want send", keys(got))
+	}
+	if got := Effective(d, "tank/a/b", "u", nil); keys(got) != "hold" {
+		t.Errorf("tank/a/b: got %s, want hold", keys(got))
+	}
+}
+
+func TestMalformedLinesError(t *testing.T) {
+	for name, in := range map[string]string{
+		"malformed header":     "---- Permissions on tank ----\nLocal permissions:\n\tuser a send\n---- Permissions of tank ----\n\tuser a hold\n",
+		"header-like colon":    "---- Permissions on tank ----\n---- bogus:\n",
+		"nonindented no colon": "---- Permissions on tank ----\nLocal permissions:\ngarbage\n\tuser a send\n",
+	} {
+		if _, err := ParseAllow(in); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+}
+
+func TestNearestAncestorSetWins(t *testing.T) {
+	out := `---- Permissions on tank/a/b/c ----
+Local permissions:
+	user u @x
+---- Permissions on tank/a/b ----
+Permission sets:
+	@x parent
+---- Permissions on tank/a ----
+Permission sets:
+	@x grandparent
+`
+	d, err := ParseAllow(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Effective(d, "tank/a/b/c", "u", nil); keys(got) != "parent" {
+		t.Errorf("got %s, want parent", keys(got))
+	}
+}
