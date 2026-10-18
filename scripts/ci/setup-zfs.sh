@@ -15,8 +15,10 @@ pools=(syngoid-src syngoid-dst)
 it_user=syngoid-it
 
 export DEBIAN_FRONTEND=noninteractive
+# Refresh the package lists once, before any install: a stale image index
+# makes apt-get install fail with 404s.
+apt-get update -q
 if ! command -v zfs >/dev/null 2>&1; then
-	apt-get update -q
 	apt-get install -y -q zfsutils-linux
 fi
 if ! modprobe zfs; then
@@ -27,11 +29,17 @@ fi
 
 # Perl syncoid 2.2.0, for the compat tests. It needs Capture::Tiny; its default
 # lzo compression (lzop) is not used, the tests pass --compress=none.
+# The download is pinned by its sha256 and only installed when it matches.
 syncoid=/usr/local/bin/syncoid
+syncoid_url=https://raw.githubusercontent.com/jimsalterjrs/sanoid/v2.2.0/syncoid
+syncoid_sha256=5f2965b9b48165df3f507f1b473c8fe74a5ba088a59d412c7d2c746969dfa1e5
 if [ ! -x "$syncoid" ]; then
 	apt-get install -y -q libcapture-tiny-perl curl
-	curl -fsSL -o "$syncoid" https://raw.githubusercontent.com/jimsalterjrs/sanoid/v2.2.0/syncoid
-	chmod 0755 "$syncoid"
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	curl -fsSL -o "$tmp/syncoid" "$syncoid_url"
+	echo "$syncoid_sha256  $tmp/syncoid" | sha256sum -c -
+	install -m 0755 "$tmp/syncoid" "$syncoid"
 fi
 
 mkdir -p "$img_dir"
