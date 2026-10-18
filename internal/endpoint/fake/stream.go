@@ -64,16 +64,24 @@ func unregisterResume(world int64, token string) {
 }
 
 // lookupResume finds the header registered under token that was sent by
-// World src (and, when ds is set, for dataset ds).
-func lookupResume(src int64, token, ds string) (header, bool) {
+// World src (and, when ds is set, for dataset ds). It fails when several
+// target Worlds hold the same token for that sender, since the token text
+// alone cannot tell them apart.
+func lookupResume(src int64, token, ds string) (header, bool, error) {
 	resumable.Lock()
 	defer resumable.Unlock()
+	var found header
+	n := 0
 	for k, h := range resumable.m {
 		if k.token == token && h.SrcWorld == src && (ds == "" || h.Dataset == ds) {
-			return h, true
+			found = h
+			n++
 		}
 	}
-	return header{}, false
+	if n > 1 {
+		return header{}, false, fmt.Errorf("fake: resume token %q is ambiguous: %d target Worlds hold it for this sender", token, n)
+	}
+	return found, n == 1, nil
 }
 
 // buildHeader assembles the stream a send of s produces from w.
@@ -130,8 +138,11 @@ func (w *World) buildHeader(s zfs.SendSpec) (header, error) {
 // resumeHeader re-emits the stream of an interrupted receive, provided the
 // snapshots it was built from still exist.
 func (w *World) resumeHeader(s zfs.SendSpec) (header, error) {
-	h, ok := lookupResume(w.id, s.ResumeToken, s.Dataset)
+	h, ok, err := lookupResume(w.id, s.ResumeToken, s.Dataset)
 	argv := zfs.SendArgs(s)
+	if err != nil {
+		return header{}, err
+	}
 	if !ok {
 		return header{}, cmdErr(argv, "cannot resume send: invalid resume token '"+s.ResumeToken+"'")
 	}
@@ -219,8 +230,7 @@ func readStream(codec stream.Codec, r io.Reader) (header, error) {
 	if err := json.NewDecoder(dec).Decode(&h); err != nil {
 		return header{}, fmt.Errorf("fake: read stream header: %w", err)
 	}
-	// Hide dec's WriteTo: lz4's reports io.EOF as a failure.
-	if _, err := io.Copy(io.Discard, struct{ io.Reader }{dec}); err != nil {
+	if _, err := io.Copy(io.Discard, dec); err != nil {
 		return header{}, fmt.Errorf("fake: read stream: %w", err)
 	}
 	return h, nil
@@ -259,7 +269,11 @@ func (w *World) planReceive(argv []string, ds string, h header, force bool) (rec
 	switch {
 	case t != nil && t.ResumeToken != "":
 		if h.ResumeOf != t.ResumeToken {
-			return p, cmdErr(argv, "cannot receive incremental stream: destination "+ds+" contains partially-complete state from \"zfs receive -s\".")
+			kind := "new filesystem"
+			if h.isIncremental() || h.isClone() {
+				kind = "incremental"
+			}
+			return p, cmdErr(argv, "cannot receive "+kind+" stream: destination "+ds+" contains partially-complete state from \"zfs receive -s\".")
 		}
 		p.resume = true
 	case h.ResumeOf != "" && t == nil:
@@ -399,6 +413,12 @@ func (w *World) apply(ds string, h header, p recvPlan) {
 		t.dropSnaps(func(s zfs.Snapshot) bool { return snapIndex(kept, s.Name) < 0 })
 	}
 	t.Snaps = append(t.Snaps, p.newSnaps...)
+	// Keep the clock ahead of what was received so later local snapshots
+	// sort after the received ones.
+	for _, s := range p.newSnaps {
+		w.txg = max(w.txg, s.CreateTxg)
+		w.secs = max(w.secs, s.Creation/1000)
+	}
 	if p.resume {
 		unregisterResume(w.id, t.ResumeToken)
 		t.ResumeToken = ""

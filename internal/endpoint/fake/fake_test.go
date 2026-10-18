@@ -200,7 +200,10 @@ func TestFakeResumeToken(t *testing.T) {
 
 	// A plain receive is refused while the token exists.
 	_, rerr = replicate(src, dst, stream.None, fullSpec("s1"), zfs.RecvSpec{Dataset: "backup/a"})
-	wantStderr(t, rerr, "cannot receive incremental stream: destination backup/a contains partially-complete state from \"zfs receive -s\".")
+	wantStderr(t, rerr, "cannot receive new filesystem stream: destination backup/a contains partially-complete state from \"zfs receive -s\".")
+	if !errors.Is(rerr, zfs.ErrPartialState) {
+		t.Errorf("err = %v, want ErrPartialState", rerr)
+	}
 
 	serr, rerr := replicate(src, dst, stream.None, zfs.SendSpec{Dataset: "tank/a", ResumeToken: "tok-1"}, recv)
 	if serr != nil || rerr != nil {
@@ -689,4 +692,97 @@ func TestFakeConcurrent(t *testing.T) {
 	if !strings.HasPrefix(dst.Calls()[0], "Receive ") {
 		t.Errorf("calls = %v", dst.Calls())
 	}
+}
+
+func TestFakePartialStateMessageIncremental(t *testing.T) {
+	_, _, src, dst := pair()
+	mustReplicate(t, src, dst, fullSpec("s1"), zfs.RecvSpec{Dataset: "backup/a"})
+	dst.Faults.Receive = func(zfs.RecvSpec) error { return errors.New("boom") }
+	_, _ = replicate(src, dst, stream.None, incSpec("s1", "s2", false), zfs.RecvSpec{Dataset: "backup/a", Args: []string{"-s"}})
+	dst.Faults.Receive = nil
+	_, rerr := replicate(src, dst, stream.None, incSpec("s1", "s2", false), zfs.RecvSpec{Dataset: "backup/a"})
+	wantStderr(t, rerr, "cannot receive incremental stream: destination backup/a contains partially-complete state from \"zfs receive -s\".")
+	if !errors.Is(rerr, zfs.ErrPartialState) {
+		t.Errorf("err = %v, want ErrPartialState", rerr)
+	}
+}
+
+func TestFakeReceiveAdvancesClock(t *testing.T) {
+	sw, tw, src, dst := pair()
+	// The source clock runs far ahead of the (empty) target's.
+	for i := 0; i < 50; i++ {
+		sw.Snap("tank/a", "extra"+strconv.Itoa(i))
+	}
+	mustReplicate(t, src, dst, fullSpec("extra49"), zfs.RecvSpec{Dataset: "backup/a"})
+	recv := tw.Dataset("backup/a").Snaps[0]
+
+	local := tw.Snap("backup/a", "local")
+	if local.CreateTxg <= recv.CreateTxg || local.Creation <= recv.Creation {
+		t.Errorf("World.Snap %+v not after received %+v", local, recv)
+	}
+	if err := dst.Snapshot(ctx, []string{"backup/a@local2"}); err != nil {
+		t.Fatal(err)
+	}
+	l2 := tw.Dataset("backup/a").Snaps[2]
+	if l2.CreateTxg <= local.CreateTxg || l2.Creation <= local.Creation {
+		t.Errorf("Endpoint.Snapshot %+v not after %+v", l2, local)
+	}
+}
+
+func TestFakeSnapshotWithoutAt(t *testing.T) {
+	_, _, src, _ := pair()
+	err := src.Snapshot(ctx, []string{"tank/a"})
+	wantStderr(t, err, "cannot create snapshot 'tank/a': missing '@' delimiter in snapshot name")
+}
+
+// interruptedTargets returns two target endpoints whose full receive of s1
+// from src was interrupted, both holding "tok-1".
+func interruptedTargets(t *testing.T, src *fake.Endpoint) (tw1, tw2 *fake.World, dst1, dst2 *fake.Endpoint) {
+	t.Helper()
+	mk := func() (*fake.World, *fake.Endpoint) {
+		w := fake.NewWorld()
+		w.Create("backup", "filesystem")
+		e := fake.New(w, endpoint.HostInfo{})
+		e.Faults.Receive = func(zfs.RecvSpec) error { return errors.New("boom") }
+		_, _ = replicate(src, e, stream.None, fullSpec("s1"), zfs.RecvSpec{Dataset: "backup/a", Args: []string{"-s"}})
+		if w.Dataset("backup/a").ResumeToken != "tok-1" {
+			t.Fatalf("token = %q", w.Dataset("backup/a").ResumeToken)
+		}
+		e.Faults.Receive = nil
+		return w, e
+	}
+	tw1, dst1 = mk()
+	tw2, dst2 = mk()
+	return tw1, tw2, dst1, dst2
+}
+
+func TestFakeResumeTokenAmbiguous(t *testing.T) {
+	_, _, src, _ := pair()
+	_, _, _, _ = interruptedTargets(t, src)
+	err := src.Send(ctx, zfs.SendSpec{Dataset: "tank/a", ResumeToken: "tok-1"}, endpoint.SendOpts{Codec: stream.None}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("err = %v, want ambiguous resume token error", err)
+	}
+}
+
+func TestFakeResumeRegistryCleanup(t *testing.T) {
+	_, _, src, _ := pair()
+	tw1, _, dst1, dst2 := interruptedTargets(t, src)
+	send := zfs.SendSpec{Dataset: "tank/a", ResumeToken: "tok-1"}
+	recv := zfs.RecvSpec{Dataset: "backup/a", Args: []string{"-s"}}
+
+	// Destroying one target's dataset unregisters its token: no longer ambiguous.
+	if err := dst1.DestroyDataset(ctx, "backup/a", false); err != nil {
+		t.Fatal(err)
+	}
+	if tw1.Dataset("backup/a") != nil {
+		t.Fatal("dataset remains")
+	}
+	if serr, rerr := replicate(src, dst2, stream.None, send, recv); serr != nil || rerr != nil {
+		t.Fatalf("resume after cleanup: send=%v recv=%v", serr, rerr)
+	}
+
+	// A successful resume also unregisters: the token is now unknown.
+	err := src.Send(ctx, send, endpoint.SendOpts{Codec: stream.None}, io.Discard)
+	wantStderr(t, err, "cannot resume send: invalid resume token 'tok-1'")
 }

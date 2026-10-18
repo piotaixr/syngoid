@@ -214,7 +214,9 @@ func New(w *World, info endpoint.HostInfo) *Endpoint {
 
 // Calls returns a copy of the call log: one "<Method> <main argument>" entry
 // per mutating or transferring call (Snapshot, Destroy, DestroyDataset, Hold,
-// Release, Bookmark, AbortResume, Send, Receive), failed ones included.
+// Release, Bookmark, AbortResume, Send, Receive), failed ones included. Query
+// methods (ListTree, GetProps, Exists, SendEstimate, ...) are not logged, so
+// tests can assert the exact sequence of changes.
 func (e *Endpoint) Calls() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -409,7 +411,10 @@ func (e *Endpoint) Snapshot(_ context.Context, names []string) error {
 	var items []item
 	seen := map[string]bool{}
 	for _, n := range names {
-		ds, snap, _ := strings.Cut(n, "@")
+		ds, snap, ok := strings.Cut(n, "@")
+		if !ok {
+			return cmdErr(argv, "cannot create snapshot '"+n+"': missing '@' delimiter in snapshot name")
+		}
 		d := w.ds[ds]
 		if d == nil {
 			return noDataset(argv, ds)
@@ -505,6 +510,9 @@ func (e *Endpoint) DestroyDataset(_ context.Context, ds string, recursive bool) 
 		}
 	}
 	for _, d := range tree {
+		if d.ResumeToken != "" {
+			unregisterResume(w.id, d.ResumeToken)
+		}
 		delete(w.ds, d.Name)
 	}
 	return nil

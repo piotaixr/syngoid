@@ -68,6 +68,13 @@ func NewEncoder(c Codec, w io.Writer) (io.WriteCloser, error) {
 	return nil, fmt.Errorf("unknown codec %q", c)
 }
 
+// readOnly exposes only Read of an lz4 reader, hiding its WriteTo, which
+// returns io.EOF as an error when called after a Read reached the end.
+type readOnly struct{ r io.Reader }
+
+func (d readOnly) Read(p []byte) (int, error) { return d.r.Read(p) }
+func (readOnly) Close() error                 { return nil }
+
 // zstdDecoder adapts zstd.Decoder, whose Close returns nothing, to io.ReadCloser.
 type zstdDecoder struct{ *zstd.Decoder }
 
@@ -89,7 +96,7 @@ func NewDecoder(c Codec, r io.Reader) (io.ReadCloser, error) {
 		}
 		return zstdDecoder{d}, nil
 	case LZ4:
-		return io.NopCloser(lz4.NewReader(r)), nil
+		return readOnly{lz4.NewReader(r)}, nil
 	case Gzip:
 		return gzip.NewReader(r)
 	}

@@ -2,6 +2,8 @@ package stream
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"testing"
@@ -155,4 +157,45 @@ func FuzzCodecRoundTrip(f *testing.F) {
 			roundTrip(t, c, data)
 		}
 	})
+}
+
+// TestDecoderCopyAfterRead guards against decoders whose WriteTo reports
+// io.EOF as an error once Read has already consumed (part of) the stream,
+// including the case where that Read consumed all of it.
+func TestDecoderCopyAfterRead(t *testing.T) {
+	for _, size := range []int{10, 64 << 10} {
+		data := testData(size)
+		for _, c := range allCodecs {
+			t.Run(fmt.Sprintf("%s/%d", c, size), func(t *testing.T) {
+				var enc bytes.Buffer
+				w, err := NewEncoder(c, &enc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := w.Write(data); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				dec, err := NewDecoder(c, &enc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = dec.Close() }()
+				head := make([]byte, 100)
+				n, err := dec.Read(head)
+				if err != nil && !errors.Is(err, io.EOF) {
+					t.Fatal(err)
+				}
+				var rest bytes.Buffer
+				if _, err := io.Copy(&rest, dec); err != nil {
+					t.Fatalf("io.Copy after Read: %v", err)
+				}
+				if !bytes.Equal(append(head[:n], rest.Bytes()...), data) {
+					t.Error("decoded data differs")
+				}
+			})
+		}
+	}
 }
