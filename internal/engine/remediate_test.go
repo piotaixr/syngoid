@@ -130,6 +130,9 @@ func TestExecutorDestinationExistsForceDelete(t *testing.T) {
 		if got, want := dsSnaps(env.tw, "backup/data"), []string{"a", "b", "x", ts}; !eqStrings(got, want) {
 			t.Errorf("target snaps %v, want %v", got, want)
 		}
+		if want := "removing existing destination: backup/data@x"; !containsMsg(env.logs.at(slog.LevelWarn), want) {
+			t.Errorf("missing WARN %q in %q", want, env.logs.at(slog.LevelWarn))
+		}
 	})
 	t.Run("force delete declined", func(t *testing.T) {
 		env := setup(t)
@@ -195,6 +198,68 @@ func TestExecutorForceDestroyTarget(t *testing.T) {
 	if got, want := dsSnaps(env.tw, "backup/data"), []string{"a", ts}; !eqStrings(got, want) {
 		t.Errorf("target snaps %v, want %v", got, want)
 	}
+	if want := "Removing backup/data because no matching snapshots were found"; !containsMsg(env.logs.at(slog.LevelWarn), want) {
+		t.Errorf("missing WARN %q in %q", want, env.logs.at(slog.LevelWarn))
+	}
+}
+
+func TestExecutorForceDestroyTargetRecursive(t *testing.T) {
+	// setup has tank/data and tank/data/c with snapshot a, an unrelated
+	// backup/data, and backup/data/c holding a.
+	setup := func(t *testing.T) *execEnv {
+		env := newExecEnv(t, "tank/data", "backup/data")
+		env.opts.Recursive = true
+		env.opts.ForceDelete = true
+		env.sw.Create("tank", "")
+		env.sw.Create("tank/data", "")
+		env.sw.Snap("tank/data", "a")
+		env.sw.Create("tank/data/c", "")
+		env.sw.Snap("tank/data/c", "a")
+		env.tw.Create("backup", "")
+		env.tw.Create("backup/data", "")
+		env.tw.Snap("backup/data", "z")
+		mustTransfer(t, env.src, env.dst, zfs.SendSpec{Dataset: "tank/data/c", To: "a"}, "backup/data/c")
+		return env
+	}
+	t.Run("child with work", func(t *testing.T) {
+		env := setup(t)
+		ts := syncName(10)
+		states, plans := env.plan(ts)
+		if plans[0].Actions[0] != (ForceDestroyTarget{}) || plans[1].Status != StatusOK {
+			t.Fatalf("plans %+v", plans)
+		}
+		nd := len(env.dst.Calls())
+		res := env.exec(context.Background(), ts, states, plans)
+		wantStatuses(t, res, StatusOK, StatusOK)
+		if n := countPrefix(env.src.Calls(), "Snapshot "); n != 1 {
+			t.Errorf("%d Snapshot calls, want 1: %q", n, env.src.Calls())
+		}
+		wantCalls(t, "target", callsFrom(env.dst, nd), []string{
+			"DestroyDataset -r backup/data", "Receive backup/data", "Receive backup/data",
+			"Receive backup/data/c", "Receive backup/data/c",
+		})
+		for ds, want := range map[string][]string{"backup/data": {"a", ts}, "backup/data/c": {"a", ts}} {
+			if got := dsSnaps(env.tw, ds); !eqStrings(got, want) {
+				t.Errorf("%s snaps %v, want %v", ds, got, want)
+			}
+		}
+	})
+	t.Run("child with nothing to do", func(t *testing.T) {
+		env := setup(t)
+		env.opts.NoSyncSnap = true
+		states, plans := env.plan("")
+		if plans[1].Status != StatusNothing {
+			t.Fatalf("child plan %+v", plans[1])
+		}
+		res := env.exec(context.Background(), "", states, plans)
+		wantStatuses(t, res, StatusOK, StatusOK)
+		if got := dsSnaps(env.tw, "backup/data/c"); !eqStrings(got, []string{"a"}) {
+			t.Errorf("backup/data/c snaps %v, want [a]", got)
+		}
+		if info := env.logs.at(slog.LevelInfo); containsMsg(info, plans[1].Message) {
+			t.Errorf("stale nothing-to-do outcome logged: %q", info)
+		}
+	})
 }
 
 func TestExecutorConfirmDestructive(t *testing.T) {
@@ -274,6 +339,45 @@ func TestExecutorSourceVanished(t *testing.T) {
 	}
 	if !containsMsg(env.logs.at(slog.LevelWarn), want) {
 		t.Errorf("missing WARN %q in %q", want, env.logs.at(slog.LevelWarn))
+	}
+	if containsMsg(env.logs.at(slog.LevelInfo), want) {
+		t.Errorf("vanished outcome logged twice: INFO %q", env.logs.at(slog.LevelInfo))
+	}
+}
+
+func TestExecutorSourceSnapshotVanished(t *testing.T) {
+	// The incremental base b is destroyed on the source between gather and
+	// send: zfs send reports it as a missing dataset, the re-plan falls back
+	// to the older common snapshot a.
+	env := newExecEnv(t, "tank/data", "backup/data")
+	env.sw.Create("tank", "")
+	env.sw.Create("tank/data", "")
+	for _, s := range []string{"a", "b", "c"} {
+		env.sw.Snap("tank/data", s)
+	}
+	env.tw.Create("backup", "")
+	mustTransfer(t, env.src, env.dst, zfs.SendSpec{Dataset: "tank/data", To: "a"}, "backup/data")
+	mustTransfer(t, env.src, env.dst, zfs.SendSpec{Dataset: "tank/data", FromSnap: "a", To: "b"}, "backup/data")
+	remover := fake.New(env.sw, endpoint.HostInfo{})
+	var once sync.Once
+	env.src.Faults.Send = func(zfs.SendSpec) error {
+		once.Do(func() {
+			if err := remover.Destroy(context.Background(), "tank/data", []string{"b"}); err != nil {
+				t.Error(err)
+			}
+		})
+		return nil
+	}
+	ts := syncName(10)
+	res := env.run(ts)
+	wantStatuses(t, res, StatusOK)
+	if got, want := dsSnaps(env.tw, "backup/data"), []string{"a", "c", ts}; !eqStrings(got, want) {
+		t.Errorf("target snaps %v, want %v", got, want)
+	}
+	for _, w := range env.logs.at(slog.LevelWarn) {
+		if strings.HasPrefix(w, "Skipping dataset") {
+			t.Errorf("unexpected skip warning %q", w)
+		}
 	}
 }
 

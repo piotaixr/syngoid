@@ -583,3 +583,34 @@ func TestSendMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutorLogsPlanOutcomes(t *testing.T) {
+	env := newExecEnv(t, "tank/data", "backup/data")
+	env.opts.Recursive = true
+	env.opts.NoSyncSnap = true
+	env.sw.Create("tank", "")
+	env.sw.Create("tank/data", "")
+	env.sw.Snap("tank/data", "a")
+	env.sw.Create("tank/data/off", "")
+	env.sw.Snap("tank/data/off", "a")
+	env.sw.SetProp("tank/data/off", "syncoid:sync", "false")
+	env.sw.Create("tank/data/empty", "")
+	env.tw.Create("backup", "")
+	mustTransfer(t, env.src, env.dst, zfs.SendSpec{Dataset: "tank/data", To: "a"}, "backup/data")
+	env.tw.Create("backup/data/empty", "")
+	env.tw.Snap("backup/data/empty", "z")
+
+	res := env.run("")
+	wantStatuses(t, res, StatusNothing, StatusSoft, StatusSkipped)
+	if got, want := env.logs.at(slog.LevelInfo), []string{
+		"no snapshots on source newer than a on target. Nothing to do, not syncing.",
+		"Skipping dataset (syncoid:sync=false): tank/data/off...",
+	}; !eqStrings(got, want) {
+		t.Errorf("INFO %q, want %q", got, want)
+	}
+	if got, want := env.logs.at(slog.LevelWarn), []string{
+		"no snapshots exist on source tank/data/empty, and you asked for --no-sync-snap.",
+	}; !eqStrings(got, want) {
+		t.Errorf("WARN %q, want %q", got, want)
+	}
+}

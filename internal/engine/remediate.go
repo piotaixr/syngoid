@@ -13,8 +13,9 @@ import (
 // remediation of spec §8.7: abort partial state and retry once
 // (--no-resume), abort a resume whose source is gone and re-plan, destroy a
 // conflicting snapshot (--force-delete) and re-plan, fall back from a clone
-// send to full replication, or skip a vanished source. Anything else is
-// critical.
+// send to full replication, or re-plan after the source reported a missing
+// dataset or snapshot (skipping the dataset if the source itself is gone).
+// Anything else is critical.
 func (d *dsRun) remediate(ctx context.Context, a Action, err error) step {
 	source, target := errSides(err)
 	_, isResume := a.(Resume)
@@ -48,7 +49,10 @@ func (d *dsRun) remediate(ctx context.Context, a Action, err error) step {
 		return d.replan(ctx, false, err)
 
 	case source && errors.Is(err, zfs.ErrNoDataset):
-		return d.vanished()
+		// zfs send reports a missing snapshot like a missing dataset:
+		// re-gathering tells them apart (GatherOne fails with ErrNoDataset
+		// only when the dataset itself is gone).
+		return d.replan(ctx, d.st.OriginInScope, err)
 	}
 	return d.fail(a, err)
 }
@@ -66,6 +70,7 @@ func (d *dsRun) destroyConflict(ctx context.Context, a Action, name string, err 
 	if d.e.Confirm != nil && !d.e.Confirm("Destroy conflicting "+name+" (--force-delete)?") {
 		return d.end(StatusCritical, msgDeclined, err)
 	}
+	d.e.Log.Warn("removing existing destination: " + name)
 	if derr := d.e.Dst.Destroy(ctx, ds, []string{snap}); derr != nil {
 		return d.fail(a, fmt.Errorf("%w (destroying %s failed: %w)", err, name, derr))
 	}

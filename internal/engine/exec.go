@@ -51,7 +51,10 @@ type Executor struct {
 // A dataset whose dependency ended other than ok or nothing to do is
 // skipped as a soft failure. After ctx
 // is cancelled no new action starts and every unfinished dataset ends
-// critical with message "cancelled".
+// critical with message "cancelled". Every outcome is logged: critical
+// failures as CRITICAL ERROR, soft failures as WARNING, skipped datasets
+// and nothing to do as INFO; plan-time outcomes are logged when their
+// dataset's turn comes.
 func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan) []Result {
 	if e.Log == nil {
 		e.Log = slog.New(slog.DiscardHandler)
@@ -60,17 +63,19 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 		e.Progress = stream.NewRenderer(stream.ProgressNone, nil, false, nil)
 	}
 	r := &runState{
-		e:       e,
-		states:  append([]DatasetState(nil), states...),
-		plans:   append([]Plan(nil), plans...),
-		results: make([]Result, len(states)),
-		done:    make([]bool, len(states)),
+		e:        e,
+		states:   append([]DatasetState(nil), states...),
+		plans:    append([]Plan(nil), plans...),
+		results:  make([]Result, len(states)),
+		done:     make([]bool, len(states)),
+		logLater: make([]bool, len(states)),
+		stale:    make([]bool, len(states)),
+		visited:  make([]bool, len(states)),
 	}
 	for i, s := range r.states {
 		r.results[i] = Result{Source: s.Source, Target: s.Target}
 		if p := r.plans[i]; p.Status != StatusOK {
-			r.results[i].Status, r.results[i].Message = p.Status, p.Message
-			r.done[i] = true
+			r.planned(i, p)
 		}
 	}
 
@@ -84,7 +89,12 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 	order, deps := Order(r.states)
 	failed := make([]bool, len(r.states))
 	for _, i := range order {
-		if !r.done[i] {
+		r.visited[i] = true
+		switch {
+		case r.logLater[i]:
+			r.logLater[i] = false
+			r.e.logOutcome(r.results[i].Status, r.results[i].Message)
+		case !r.done[i]:
 			r.runOne(ctx, i, deps[i], failed)
 		}
 		st := r.results[i].Status
@@ -100,6 +110,14 @@ type runState struct {
 	plans   []Plan
 	results []Result
 	done    []bool
+	// logLater marks final outcomes decided by a plan, logged when the
+	// dataset's turn comes in the execution order.
+	logLater []bool
+	// stale marks datasets whose target was destroyed by an ancestor's
+	// --force-delete: they are re-gathered and re-planned before running.
+	stale []bool
+	// visited marks the datasets the execution loop has reached.
+	visited []bool
 }
 
 // runOne executes dataset i unless ctx is cancelled or a dependency failed.
@@ -114,9 +132,62 @@ func (r *runState) runOne(ctx context.Context, i int, deps []int, failed []bool)
 			return
 		}
 	}
-	res := r.e.runDataset(ctx, r.states[i], r.plans[i])
-	r.finish(i, res.Status, res.Message, res.Err)
-	r.results[i].Bytes, r.results[i].Duration = res.Bytes, res.Duration
+	if r.stale[i] && !r.regather(ctx, i) {
+		return
+	}
+	d := r.e.runDataset(ctx, r.states[i], r.plans[i])
+	if d.logged {
+		r.record(i, d.res.Status, d.res.Message, d.res.Err)
+	} else {
+		r.finish(i, d.res.Status, d.res.Message, d.res.Err)
+	}
+	r.results[i].Bytes, r.results[i].Duration = d.res.Bytes, d.res.Duration
+	if d.destroyed != "" {
+		r.invalidate(d.destroyed)
+	}
+}
+
+// invalidate marks every dataset not yet reached whose target is under the
+// recursively destroyed target as stale. One that had nothing to do is
+// pending again: its target no longer exists.
+func (r *runState) invalidate(destroyed string) {
+	for j, s := range r.states {
+		if r.visited[j] || (s.Target != destroyed && !strings.HasPrefix(s.Target, destroyed+"/")) {
+			continue
+		}
+		if r.done[j] {
+			if r.results[j].Status != StatusNothing {
+				continue
+			}
+			r.done[j], r.logLater[j] = false, false
+			r.results[j] = Result{Source: s.Source, Target: s.Target}
+		}
+		r.stale[j] = true
+	}
+}
+
+// regather refreshes the state and plan of stale dataset i. It reports
+// false when the dataset ended instead. The sync snapshot already exists,
+// so none is created.
+func (r *runState) regather(ctx context.Context, i int) bool {
+	s := r.states[i]
+	st, err := GatherOne(ctx, r.e.Src, r.e.Dst, r.e.Opts, s.Source, s.Target, r.e.SyncSnap, s.OriginInScope)
+	switch {
+	case errors.Is(err, zfs.ErrNoDataset):
+		r.vanished(i)
+		return false
+	case err != nil:
+		r.finish(i, StatusCritical, fmt.Sprintf("%s: re-gather failed: %v", s.Source, err), err)
+		return false
+	}
+	st = stripSyncSnap(st)
+	p := PlanDataset(st, r.e.PlanOpts)
+	r.states[i], r.plans[i] = st, p
+	if p.Status != StatusOK {
+		r.finish(i, p.Status, p.Message, nil)
+		return false
+	}
+	return true
 }
 
 // pending returns the indices of the datasets without a final result.
@@ -130,16 +201,42 @@ func (r *runState) pending() []int {
 	return out
 }
 
-// finish records the final status of dataset i, logging failures.
-func (r *runState) finish(i int, st Status, msg string, err error) {
+// record sets the final status of dataset i without logging it.
+func (r *runState) record(i int, st Status, msg string, err error) {
 	res := &r.results[i]
 	res.Status, res.Message, res.Err = st, msg, err
 	r.done[i] = true
-	switch {
-	case st == StatusCritical && msg != msgCancelled:
-		logx.Critical(r.e.Log, msg)
-	case st == StatusSoft:
-		r.e.Log.Warn(msg)
+}
+
+// finish records the final status of dataset i and logs it.
+func (r *runState) finish(i int, st Status, msg string, err error) {
+	r.record(i, st, msg, err)
+	r.e.logOutcome(st, msg)
+}
+
+// planned records the non-ok outcome of plan p for dataset i, to be logged
+// when the execution loop reaches the dataset.
+func (r *runState) planned(i int, p Plan) {
+	r.record(i, p.Status, p.Message, nil)
+	r.logLater[i] = true
+}
+
+// logOutcome logs the final outcome of a dataset at the level matching st.
+// Cancellations are not logged per dataset.
+func (e *Executor) logOutcome(st Status, msg string) {
+	if msg == "" {
+		return
+	}
+	switch st {
+	case StatusCritical:
+		if msg != msgCancelled {
+			logx.Critical(e.Log, msg)
+		}
+	case StatusSoft:
+		e.Log.Warn(msg)
+	case StatusSkipped, StatusNothing:
+		e.Log.Info(msg)
+	case StatusOK:
 	}
 }
 
@@ -173,7 +270,7 @@ func (r *runState) checkBusy(ctx context.Context) {
 func (r *runState) vanished(i int) {
 	msg := vanishedMessage(r.states[i].Source)
 	r.e.Log.Warn(msg)
-	r.finish(i, StatusSkipped, msg, nil)
+	r.record(i, StatusSkipped, msg, nil)
 }
 
 func busyMessage(target string) string {
@@ -265,7 +362,7 @@ func (r *runState) refresh(ctx context.Context) {
 		}
 		r.states[i], r.plans[i] = s, p
 		if p.Status != StatusOK {
-			r.finish(i, p.Status, p.Message, nil)
+			r.planned(i, p)
 		}
 	}
 }
@@ -325,15 +422,20 @@ type dsRun struct {
 	worked      bool
 	busyChecked bool
 	retried     bool
+	// logged records that the outcome was already logged; destroyed is the
+	// target destroyed recursively by --force-delete, if any.
+	logged    bool
+	destroyed string
 }
 
-// runDataset executes plan p for state st.
-func (e *Executor) runDataset(ctx context.Context, st DatasetState, p Plan) Result {
+// runDataset executes plan p for state st; the outcome is in the
+// returned dsRun's res.
+func (e *Executor) runDataset(ctx context.Context, st DatasetState, p Plan) *dsRun {
 	start := time.Now()
 	d := &dsRun{e: e, st: st, plan: p, res: Result{Source: st.Source, Target: st.Target}}
 	d.run(ctx)
 	d.res.Duration = time.Since(start)
-	return d.res
+	return d
 }
 
 func (d *dsRun) run(ctx context.Context) {
@@ -385,6 +487,7 @@ func (d *dsRun) warn(a Action, err error) {
 func (d *dsRun) vanished() step {
 	msg := vanishedMessage(d.st.Source)
 	d.e.Log.Warn(msg)
+	d.logged = true
 	return d.end(StatusSkipped, msg, nil)
 }
 
@@ -429,7 +532,8 @@ func (d *dsRun) checkBusy(ctx context.Context) (step, bool) {
 }
 
 // forceDestroy destroys the target recursively, after confirmation, and
-// re-plans; the sync snapshot already exists, so none is created. It never
+// re-plans; the sync snapshot already exists, so none is created. The
+// datasets under the target are re-planned by Run before they run. It never
 // destroys a pool root, a busy target, or once the re-plan budget is spent.
 func (d *dsRun) forceDestroy(ctx context.Context) step {
 	if d.st.TargetIsPoolRoot {
@@ -444,10 +548,12 @@ func (d *dsRun) forceDestroy(ctx context.Context) step {
 	if d.e.Confirm != nil && !d.e.Confirm("Destroy "+d.st.Target+" recursively (--force-delete)?") {
 		return d.end(StatusCritical, msgDeclined, nil)
 	}
+	d.e.Log.Warn("Removing " + d.st.Target + " because no matching snapshots were found")
 	if err := d.e.Dst.DestroyDataset(ctx, d.st.Target, true); err != nil {
 		return d.fail(ForceDestroyTarget{}, err)
 	}
 	d.worked = true
+	d.destroyed = d.st.Target
 	return d.replan(ctx, d.st.OriginInScope, nil)
 }
 

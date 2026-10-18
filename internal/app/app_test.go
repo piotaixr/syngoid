@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -381,4 +382,69 @@ func TestMainHostnameError(t *testing.T) {
 	if !strings.Contains(se.stderr.String(), "CRITICAL ERROR: ") {
 		t.Errorf("stderr = %q", se.stderr)
 	}
+}
+
+func TestMainPlanOutcomesLogged(t *testing.T) {
+	noMatch := func(t *testing.T) *syncEnv {
+		se := newSyncEnv(t, endpoint.HostInfo{})
+		se.world.Create("backup/data", "")
+		se.world.Snap("backup/data", "unrelated")
+		return se
+	}
+	for _, quiet := range []bool{false, true} {
+		t.Run(fmt.Sprintf("critical no match quiet=%v", quiet), func(t *testing.T) {
+			se := noMatch(t)
+			args := []string{"tank/data", "backup/data"}
+			if quiet {
+				args = append([]string{"--quiet"}, args...)
+			}
+			if got := se.run(args...); got != 2 {
+				t.Fatalf("exit code = %d, want 2", got)
+			}
+			errOut := se.stderr.String()
+			for _, want := range []string{
+				"CRITICAL ERROR: Target backup/data exists but has no snapshots matching with tank/data!\n",
+				"Cowardly refusing to destroy your existing target.\n",
+				"NOTE: Target backup/data dataset is < 64MB used - did you mistakenly run\n",
+			} {
+				if !strings.Contains(errOut, want) {
+					t.Errorf("stderr does not contain %q:\n%s", want, errOut)
+				}
+			}
+			if n := strings.Count(errOut, "CRITICAL ERROR: "); n != 1 {
+				t.Errorf("%d CRITICAL ERROR lines, want 1:\n%s", n, errOut)
+			}
+		})
+	}
+
+	t.Run("skip logged as INFO", func(t *testing.T) {
+		se := newSyncEnv(t, endpoint.HostInfo{})
+		se.world.SetProp("tank/data", "syncoid:sync", "false")
+		if got := se.run("tank/data", "backup/data"); got != 0 {
+			t.Fatalf("exit code = %d, want 0; stderr %q", got, se.stderr)
+		}
+		if want := "INFO: Skipping dataset (syncoid:sync=false): tank/data...\n"; !strings.Contains(se.stdout.String(), want) {
+			t.Errorf("stdout does not contain %q:\n%s", want, se.stdout)
+		}
+	})
+	t.Run("skip silent under quiet", func(t *testing.T) {
+		se := newSyncEnv(t, endpoint.HostInfo{})
+		se.world.SetProp("tank/data", "syncoid:sync", "false")
+		if got := se.run("--quiet", "tank/data", "backup/data"); got != 0 {
+			t.Fatalf("exit code = %d, want 0; stderr %q", got, se.stderr)
+		}
+		if se.stdout.Len() != 0 || se.stderr.Len() != 0 {
+			t.Errorf("stdout %q, stderr %q; want both empty", se.stdout, se.stderr)
+		}
+	})
+	t.Run("soft no snapshots logged as WARNING", func(t *testing.T) {
+		se := newSyncEnv(t, endpoint.HostInfo{})
+		se.world.Create("tank/empty", "")
+		if got := se.run("--no-sync-snap", "tank/empty", "backup/empty"); got != 1 {
+			t.Fatalf("exit code = %d, want 1", got)
+		}
+		if want := "WARNING: no snapshots exist on source tank/empty, and you asked for --no-sync-snap.\n"; !strings.Contains(se.stderr.String(), want) {
+			t.Errorf("stderr does not contain %q:\n%s", want, se.stderr)
+		}
+	})
 }
