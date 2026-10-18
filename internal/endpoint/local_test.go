@@ -294,3 +294,31 @@ func TestLocalSendFailureWritesNothingAndDoesNotBlock(t *testing.T) {
 		t.Errorf("w received %d writes after failure, want 0", w.writes)
 	}
 }
+
+// argvExec runs argv through zfs.OSExec in place of every command.
+type argvExec []string
+
+func (a argvExec) Run(ctx context.Context, c zfs.Cmd) error {
+	c.Argv = a
+	return zfs.OSExec{}.Run(ctx, c)
+}
+
+func TestLocalReceiveFailsPromptlyWhileInputBlocks(t *testing.T) {
+	ex := argvExec{"sh", "-c", "echo 'cannot receive: failed' >&2; exit 1"}
+	l := endpoint.NewLocal(&zfs.Client{Exec: ex}, ex)
+	in, feed := io.Pipe() // never written: the sender is stalled
+	defer func() { _ = feed.Close() }()
+	done := make(chan error, 1)
+	go func() {
+		done <- l.Receive(context.Background(), zfs.RecvSpec{Dataset: "tank/b"}, stream.None, in)
+	}()
+	select {
+	case err := <-done:
+		var ce *zfs.CommandError
+		if !errors.As(err, &ce) || ce.ExitCode != 1 {
+			t.Fatalf("err = %v, want the *CommandError from zfs receive", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Receive waited for the blocked input after zfs receive failed")
+	}
+}

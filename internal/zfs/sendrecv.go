@@ -99,7 +99,11 @@ func (c *Client) Send(ctx context.Context, s SendSpec, w io.Writer) error {
 	return c.Exec.Run(ctx, Cmd{Argv: c.Argv(SendArgs(s)...), Stdout: w})
 }
 
-// Receive runs zfs receive for s, reading the stream from r.
+// Receive runs zfs receive for s, reading the stream from r. When r is an
+// *os.File (such as an os.Pipe read end) the process reads it directly, so
+// Receive returns as soon as zfs receive exits, even while the writer of r
+// is blocked; any other reader is copied by a goroutine that the command
+// waits for.
 func (c *Client) Receive(ctx context.Context, s RecvSpec, r io.Reader) error {
 	args := append([]string{"receive"}, s.Args...)
 	return c.Exec.Run(ctx, Cmd{Argv: c.Argv(append(args, s.Dataset)...), Stdin: r})

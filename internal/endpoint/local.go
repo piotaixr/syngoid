@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -145,29 +146,47 @@ func (l *Local) Send(ctx context.Context, s zfs.SendSpec, o SendOpts, w io.Write
 	return enc.Close()
 }
 
-// errReceiveDone marks the feeder's pipe as closed by Receive itself; write
-// errors carrying it are never reported.
+// errReceiveDone replaces the feeder's write errors: the only way writing
+// into the receive's stdin pipe fails is that Receive closed its read end
+// after zfs receive exited, so such errors are never reported.
 var errReceiveDone = errors.New("endpoint: receive finished")
 
-// Receive decodes r with codec and feeds the result to zfs receive. The
-// decoder is built inside the feeding goroutine because some decoders read
-// the stream header on construction. A genuine read or decode error wins
-// over the receive error it causes; otherwise the receive error is returned
-// unchanged.
+// receiveFeed is the write end of zfs receive's stdin pipe.
+type receiveFeed struct{ w *os.File }
+
+func (f receiveFeed) Write(p []byte) (int, error) {
+	n, err := f.w.Write(p)
+	if err != nil {
+		err = errReceiveDone
+	}
+	return n, err
+}
+
+// Receive decodes r with codec and feeds the result to zfs receive through
+// an OS pipe, so zfs receive owns its stdin and an early failure returns
+// without waiting for r. The decoder is built inside the feeding goroutine
+// because some decoders read the stream header on construction. A genuine
+// read or decode error wins over the receive error it causes; otherwise the
+// receive error is returned unchanged. When the receive fails, the feeder
+// may still be blocked reading r; the caller unblocks it by closing r.
 func (l *Local) Receive(ctx context.Context, s zfs.RecvSpec, codec stream.Codec, r io.Reader) error {
-	pr, pw := io.Pipe()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("endpoint: receive pipe: %w", err)
+	}
 	decErr := make(chan error, 1)
 	go func() {
-		err := decodeInto(pw, codec, r)
+		err := decodeInto(receiveFeed{pw}, codec, r)
 		if errors.Is(err, errReceiveDone) {
 			err = nil
 		}
 		decErr <- err // before closing pw so a receive failure sees it
-		pw.CloseWithError(err)
+		_ = pw.Close()
 	}()
 	recvErr := l.Client.Receive(ctx, s, pr)
-	// Unblock the feeder if receive stopped reading early.
-	pr.CloseWithError(errReceiveDone)
+	// Unblock the feeder if receive stopped reading early: its writes now
+	// fail with EPIPE.
+	_ = pr.Close()
 	if recvErr != nil {
 		select {
 		case err := <-decErr:
