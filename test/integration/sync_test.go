@@ -70,9 +70,11 @@ func TestITInitialAndIncremental(t *testing.T) {
 		}
 	}
 
+	// The per-dataset summary line (the totals line always mentions
+	// "nothing to do").
 	r := syngoidOK(t, "--no-sync-snap", src, dst)
-	if !strings.Contains(r.stdout, "nothing to do") {
-		t.Fatal("a run without new snapshots should report nothing to do")
+	if !strings.Contains(r.stdout, src+" → "+dst+": nothing to do") {
+		t.Fatal("a run without new snapshots should report nothing to do for the dataset")
 	}
 }
 
@@ -87,7 +89,7 @@ func TestITRecursiveWithClone(t *testing.T) {
 
 	syngoidOK(t, "-r", root, troot)
 	for _, ds := range []string{troot, troot + "/a", troot + "/b"} {
-		if !exists(ds) {
+		if !exists(t, ds) {
 			t.Fatalf("%s was not created", ds)
 		}
 	}
@@ -106,10 +108,10 @@ func TestITExcludeDatasets(t *testing.T) {
 	zfs(t, "create", root+"/skip")
 
 	syngoidOK(t, "-r", "--exclude-datasets=/skip$", root, troot)
-	if !exists(troot + "/keep") {
+	if !exists(t, troot+"/keep") {
 		t.Fatalf("%s/keep was not replicated", troot)
 	}
-	if exists(troot + "/skip") {
+	if exists(t, troot+"/skip") {
 		t.Fatalf("%s/skip was replicated despite --exclude-datasets", troot)
 	}
 	if got := syncSnaps(t, root+"/skip", naming.SyncSnapPattern("", host)); len(got) != 0 {
@@ -141,7 +143,7 @@ func TestITUseHold(t *testing.T) {
 	}
 	// The previous sync snapshot was released, so pruning could destroy it.
 	for _, s := range []string{src + "@" + first, dst + "@" + first} {
-		if exists(s) {
+		if exists(t, s) {
 			t.Fatalf("%s still exists: its hold was not released before pruning", s)
 		}
 	}
@@ -200,7 +202,7 @@ func TestITPruneOnlyOwn(t *testing.T) {
 		t.Fatalf("source snapshots = %q, want the foreign one and one per identifier", snaps(t, src))
 	}
 	for _, s := range []string{src + "@" + foreign, dstPool + "/plain@" + foreign} {
-		if !exists(s) {
+		if !exists(t, s) {
 			t.Fatalf("foreign sync snapshot %s was pruned", s)
 		}
 	}
@@ -255,7 +257,7 @@ func TestITDryRunNoChanges(t *testing.T) {
 	zfs(t, "snapshot", src+"@s1")
 
 	r := syngoidOK(t, "--dry-run", src, dst)
-	if exists(dst) {
+	if exists(t, dst) {
 		t.Fatalf("--dry-run created %s", dst)
 	}
 	equal(t, "source snapshots after --dry-run", snaps(t, src), full(src, "s1"))

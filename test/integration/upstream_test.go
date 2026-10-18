@@ -298,7 +298,7 @@ func TestUpstream010FilterSnaps(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			// clean_snaps: each case starts without a target.
-			if exists(dst) {
+			if exists(t, dst) {
 				destroyWithRetry(t, dst)
 			}
 			args := append(append([]string{"--debug", "--compress=none"}, c.args...), src, dst)

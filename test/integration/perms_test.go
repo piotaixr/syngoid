@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -71,8 +72,19 @@ func TestITUnprivLinuxReceiveUnmounted(t *testing.T) {
 	begin(t)
 	src, parent := srcPool+"/um", dstPool+"/um"
 	dst := parent + "/dst"
-	custom := "/tmp/syngoid-it-um-mountpoint"
+	// Not t.TempDir: its cleanup (RemoveAll) would run while src is still
+	// mounted there. Destroy src first, then remove the then-empty dir.
+	custom, err := os.MkdirTemp("", "syngoid-it-um-")
+	if err != nil {
+		t.Fatal(err)
+	}
 	zfs(t, "create", "-o", "mountpoint="+custom, src)
+	t.Cleanup(func() {
+		destroyWithRetry(t, src)
+		if err := os.Remove(custom); err != nil {
+			t.Error(err)
+		}
+	})
 	zfs(t, "create", parent)
 
 	// --preserve-properties would pass the locally set mountpoint; an

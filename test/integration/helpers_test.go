@@ -71,7 +71,7 @@ func testMain(m *testing.M) int {
 		return 2
 	}
 	for _, pool := range []string{srcPool, dstPool} {
-		if err := exec.Command(zfsPath, "list", "-H", "-o", "name", pool).Run(); err != nil {
+		if err := zfsCommand("", "list", "-H", "-o", "name", pool).Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "refusing to run: test pool %s does not exist (run scripts/ci/setup-zfs.sh)\n", pool)
 			return 2
 		}
@@ -265,9 +265,24 @@ func zfs(t *testing.T, args ...string) string {
 	return out
 }
 
+// zfsCommand returns a zfs command with LC_ALL=C (so its messages are
+// predictable), run as root or, when user is non-empty, as user via sudo.
+func zfsCommand(user string, args ...string) *exec.Cmd {
+	var cmd *exec.Cmd
+	if user == "" {
+		cmd = exec.Command(zfsPath, args...)
+		cmd.Env = append(os.Environ(), "LC_ALL=C")
+	} else {
+		// sudo resets the environment, so set the locale inside it.
+		cmd = exec.Command("sudo", append([]string{"-n", "-u", user, "--", "env", "LC_ALL=C", zfsPath}, args...)...)
+	}
+	cmd.Dir = "/"
+	return cmd
+}
+
 // zfsTry runs zfs as root; the error includes the stderr.
 func zfsTry(args ...string) (string, error) {
-	cmd := exec.Command(zfsPath, args...)
+	cmd := zfsCommand("", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -296,10 +311,20 @@ func propSource(t *testing.T, ds, name string) string {
 	return zfs(t, "get", "-H", "-o", "source", name, ds)
 }
 
-// exists reports whether the dataset, snapshot or bookmark exists.
-func exists(name string) bool {
+// exists reports whether the dataset, snapshot or bookmark exists. Any
+// error other than "does not exist" fails the test, so a negative check
+// cannot pass by accident.
+func exists(t *testing.T, name string) bool {
+	t.Helper()
 	_, err := zfsTry("list", "-H", "-o", "name", "-t", "all", name)
-	return err == nil
+	switch {
+	case err == nil:
+		return true
+	case strings.Contains(err.Error(), "does not exist"):
+		return false
+	}
+	t.Fatal(err)
+	return false
 }
 
 // snaps returns the snapshot names of ds (not of its children) in zfs
@@ -447,14 +472,8 @@ func requireResumeToken(t *testing.T, ds string) {
 // stderr and error; the send's failure is ignored when the stream was cut.
 func pipeZFS(t *testing.T, sendArgs []string, user string, recvArgs []string, limit int64) (string, error) {
 	t.Helper()
-	send := exec.Command(zfsPath, sendArgs...)
-	var recv *exec.Cmd
-	if user == "" {
-		recv = exec.Command(zfsPath, recvArgs...)
-	} else {
-		recv = exec.Command("sudo", append([]string{"-n", "-u", user, "--", zfsPath}, recvArgs...)...)
-	}
-	recv.Dir = "/"
+	send := zfsCommand("", sendArgs...)
+	recv := zfsCommand(user, recvArgs...)
 	var sendErr, recvErr bytes.Buffer
 	send.Stderr, recv.Stderr = &sendErr, &recvErr
 
@@ -520,12 +539,22 @@ func interruptSync(t *testing.T, args ...string) result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	pid := cmd.Process.Pid
+	var sendPID, recvPID int
+	// killAll kills syngoid and its zfs children, which run in their own
+	// process groups and would outlive it, keeping the target busy.
+	killAll := func() {
+		for _, p := range []int{pid, sendPID, recvPID} {
+			if p != 0 {
+				_ = syscall.Kill(p, syscall.SIGKILL)
+			}
+		}
+	}
 	finish := func() result {
 		var err error
 		select {
 		case err = <-done:
 		case <-time.After(2 * time.Minute):
-			_ = cmd.Process.Kill()
+			killAll()
 			t.Fatalf("syngoid did not exit within 2 minutes (killed: %v)", <-done)
 		}
 		lastEnd = time.Now()
@@ -537,16 +566,9 @@ func interruptSync(t *testing.T, args ...string) result {
 		logResult(t, "", args, r)
 		return r
 	}
-	var sendPID, recvPID int
 	abort := func(format string, a ...any) {
 		t.Helper()
-		// The zfs children run in their own process groups and would
-		// outlive a killed syngoid.
-		for _, p := range []int{pid, sendPID, recvPID} {
-			if p != 0 {
-				_ = syscall.Kill(p, syscall.SIGKILL)
-			}
-		}
+		killAll()
 		finish()
 		t.Fatalf(format, a...)
 	}
@@ -586,8 +608,15 @@ func interruptSync(t *testing.T, args ...string) result {
 	if err := syscall.Kill(sendPID, syscall.SIGSTOP); err != nil {
 		abort("stopping zfs send: %v", err)
 	}
-	t.Logf("froze zfs send (pid %d) after %d bytes", sendPID, procWritten(sendPID))
-	time.Sleep(500 * time.Millisecond)
+	sent := procWritten(sendPID)
+	t.Logf("froze zfs send (pid %d) after %d bytes", sendPID, sent)
+	// Wait until zfs receive has read what was sent, so it is past the BEGIN
+	// record and a resume token will be saved. Without I/O accounting
+	// (sent == 0) this waits the full timeout.
+	drainBy := time.Now().Add(5 * time.Second)
+	for running(recvPID) && (sent == 0 || procRead(recvPID) < sent) && time.Now().Before(drainBy) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if !running(recvPID) {
 		_ = syscall.Kill(sendPID, syscall.SIGCONT)
 		abort("zfs receive ended before syngoid could be interrupted")
@@ -663,12 +692,23 @@ func running(pid int) bool {
 // procWritten returns the bytes pid has written so far (wchar of
 // /proc/<pid>/io), or 0 when unknown.
 func procWritten(pid int) int64 {
+	return procIO(pid, "wchar")
+}
+
+// procRead returns the bytes pid has read so far (rchar of /proc/<pid>/io),
+// or 0 when unknown.
+func procRead(pid int) int64 {
+	return procIO(pid, "rchar")
+}
+
+// procIO returns counter field of /proc/<pid>/io, or 0 when unknown.
+func procIO(pid int, field string) int64 {
 	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "io"))
 	if err != nil {
 		return 0
 	}
 	for _, l := range strings.Split(string(b), "\n") {
-		if v, ok := strings.CutPrefix(l, "wchar: "); ok {
+		if v, ok := strings.CutPrefix(l, field+": "); ok {
 			n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			return n
 		}
