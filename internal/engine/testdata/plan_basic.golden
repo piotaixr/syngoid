@@ -1,0 +1,16 @@
+create sync snapshot syncoid_nas_2026-10-18:14:03:07-GMT02:00 on 1 dataset(s)
+tank/data → backup/data
+  send incremental @a → @syncoid_nas_2026-10-18:14:03:07-GMT02:00 (with intermediates)  ~1.2 GiB
+  prune 1 sync snapshot(s) on source
+tank/data/vm → backup/data/vm
+  skip: Skipping dataset (syncoid:sync=false): tank/data/vm...
+tank/data/db → backup/data/db
+  CRITICAL: Target backup/data/db exists but has no snapshots matching with tank/data/db!
+    Replication to target would require destroying existing
+    target. Cowardly refusing to destroy your existing target.
+
+    NOTE: Target backup/data/db dataset is < 64MB used - did you mistakenly run
+    `zfs create backup/data/db` on the target? ZFS initial
+    replication must be to a NON EXISTENT DATASET, which will
+    then be CREATED BY the initial replication process.
+Total estimated transfer: ~1.2 GiB

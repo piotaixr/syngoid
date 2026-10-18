@@ -1,0 +1,56 @@
+package engine
+
+import (
+	"slices"
+	"sort"
+
+	"github.com/piotaixr/syngoid/internal/cli"
+	"github.com/piotaixr/syngoid/internal/zfs"
+)
+
+// PreservePropsDenylist lists the properties --preserve-properties never
+// passes to the receive (spec §8.6).
+var PreservePropsDenylist = []string{
+	"available", "compressratio", "createtxg", "creation", "clones", "defer_destroy",
+	"encryptionroot", "filesystem_count", "keystatus", "guid", "logicalreferenced",
+	"logicalused", "mounted", "objsetid", "origin", "receive_resume_token", "redact_snaps",
+	"referenced", "refcompressratio", "snapshot_count", "type", "used", "usedbychildren",
+	"usedbydataset", "usedbyrefreservation", "usedbysnapshots", "userrefs",
+	"snapshots_changed", "volblocksize", "written", "version", "volsize",
+	"casesensitivity", "normalization", "utf8only",
+}
+
+// RecvArgs builds the zfs receive flags: the filtered --recvoptions first,
+// then -s, -F and -u as applicable, then -o key=value pairs sorted by key.
+// With --preserve-properties the pairs are the locally-set source properties
+// not on the denylist; otherwise --preserve-recordsize adds the source
+// recordsize for the full send of a filesystem.
+func RecvArgs(o *cli.Options, full bool, sourceType string, localProps map[string]string, recordsize string, unprivLinux bool) []string {
+	args := zfs.FilterOpts(o.RecvOpts, zfs.RecvAllowed)
+	if !o.NoResume {
+		args = append(args, "-s")
+	}
+	if !o.NoRollback {
+		args = append(args, "-F")
+	}
+	if unprivLinux && !slices.ContainsFunc(o.RecvOpts, func(op zfs.Opt) bool { return op.Flag == 'u' }) {
+		args = append(args, "-u")
+	}
+	switch {
+	case o.PreserveProperties:
+		keys := make([]string, 0, len(localProps))
+		for k := range localProps {
+			if slices.Contains(PreservePropsDenylist, k) || unprivLinux && (k == "mountpoint" || k == "canmount") {
+				continue
+			}
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			args = append(args, "-o", k+"="+localProps[k])
+		}
+	case o.PreserveRecordsize && full && sourceType == "filesystem" && recordsize != "":
+		args = append(args, "-o", "recordsize="+recordsize)
+	}
+	return args
+}
