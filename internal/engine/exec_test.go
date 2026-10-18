@@ -614,3 +614,47 @@ func TestExecutorLogsPlanOutcomes(t *testing.T) {
 		t.Errorf("WARN %q, want %q", got, want)
 	}
 }
+
+func TestExecutorWarnsDroppedUnprivProps(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		props map[string]string
+		want  []string
+	}{
+		{
+			"both",
+			map[string]string{"mountpoint": "/x", "canmount": "noauto", "compression": "lz4"},
+			[]string{"tank/data: not preserving canmount, mountpoint: they cannot be set on unprivileged Linux target backup/data"},
+		},
+		{
+			"mountpoint only",
+			map[string]string{"mountpoint": "/x"},
+			[]string{"tank/data: not preserving mountpoint: it cannot be set on unprivileged Linux target backup/data"},
+		},
+		{"neither", map[string]string{"compression": "lz4"}, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newExecEnv(t, "tank/data", "backup/data")
+			env.opts.PreserveProperties = true
+			env.sw.Create("tank", "")
+			env.sw.Create("tank/data", "")
+			for k, v := range tt.props {
+				env.sw.SetProp("tank/data", k, v)
+			}
+			env.sw.Snap("tank/data", "a")
+			env.tw.Create("backup", "")
+			ts := syncName(10)
+			states, plans := env.plan(ts)
+			ex := env.executor(ts)
+			ex.UnprivLinuxTarget = true
+			res := ex.Run(context.Background(), states, plans)
+			wantStatuses(t, res, StatusOK)
+			if n := countPrefix(env.dst.Calls(), "Receive "); n != 2 {
+				t.Fatalf("%d receives, want 2 (full + incremental)", n)
+			}
+			if got := env.logs.at(slog.LevelWarn); !eqStrings(got, tt.want) {
+				t.Errorf("WARN %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

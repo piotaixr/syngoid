@@ -42,6 +42,10 @@ type Executor struct {
 	UnprivLinuxTarget    bool
 	// SyncSnap is this run's sync snapshot name ("" with --no-sync-snap).
 	SyncSnap string
+
+	// warnedUnpriv records the sources already warned about properties
+	// dropped for an unprivileged Linux target.
+	warnedUnpriv map[string]bool
 }
 
 // Run executes plans, where plans[i] is the plan of states[i], and returns

@@ -36,6 +36,19 @@ func PreservedPropKeys(localProps map[string]string, unprivLinux bool) []string 
 	return keys
 }
 
+// UnprivDroppedProps returns, sorted, the locally-set properties among
+// mountpoint and canmount, which --preserve-properties cannot set on an
+// unprivileged Linux target.
+func UnprivDroppedProps(localProps map[string]string) []string {
+	var out []string
+	for _, k := range []string{"canmount", "mountpoint"} {
+		if _, ok := localProps[k]; ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // RecvArgs builds the zfs receive flags: the filtered --recvoptions first,
 // then -s, -F and -u as applicable, then -o key=value pairs sorted by key.
 // With --preserve-properties the pairs are the locally-set source properties

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,6 +118,9 @@ func (e *Executor) recvArgs(ctx context.Context, st DatasetState, a Action) ([]s
 			return nil, err
 		}
 	}
+	if e.UnprivLinuxTarget {
+		e.warnDroppedProps(st, local)
+	}
 	recordsize := ""
 	if e.Opts.PreserveRecordsize && full {
 		props, err := e.Src.GetProps(ctx, st.Source, "recordsize")
@@ -126,6 +130,26 @@ func (e *Executor) recvArgs(ctx context.Context, st DatasetState, a Action) ([]s
 		recordsize = props["recordsize"]
 	}
 	return RecvArgs(e.Opts, full, st.SourceType, local, recordsize, e.UnprivLinuxTarget), nil
+}
+
+// warnDroppedProps warns, once per dataset, that the preserved properties
+// mountpoint and canmount are dropped for an unprivileged Linux target
+// (spec §6.1).
+func (e *Executor) warnDroppedProps(st DatasetState, local map[string]string) {
+	dropped := UnprivDroppedProps(local)
+	if len(dropped) == 0 || e.warnedUnpriv[st.Source] {
+		return
+	}
+	if e.warnedUnpriv == nil {
+		e.warnedUnpriv = map[string]bool{}
+	}
+	e.warnedUnpriv[st.Source] = true
+	verb := "they cannot"
+	if len(dropped) == 1 {
+		verb = "it cannot"
+	}
+	e.Log.Warn(fmt.Sprintf("%s: not preserving %s: %s be set on unprivileged Linux target %s",
+		st.Source, strings.Join(dropped, ", "), verb, st.Target))
 }
 
 // sendMessage is syncoid's INFO line announcing send action a.
