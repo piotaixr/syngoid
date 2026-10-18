@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0
+
+  cross:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - linux/amd64
+          - linux/arm64
+          - linux/arm
+          - linux/riscv64
+          - linux/ppc64le
+          - freebsd/amd64
+          - freebsd/arm64
+          - illumos/amd64
+          - darwin/amd64
+          - darwin/arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build ${{ matrix.target }}
+        env:
+          CGO_ENABLED: "0"
+          GOARM: "7"
+        run: |
+          target='${{ matrix.target }}'
+          GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null ./cmd/syngoid
