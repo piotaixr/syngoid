@@ -178,8 +178,8 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
   (locally) or by the agent (remotely). There is no `escapeshellparam` equivalent.
 - `internal/engine` depends only on `Endpoint`; it knows nothing about SSH, RPC, compression, or sudo.
 - Direct third-party dependencies are limited to pure-Go modules: `spf13/pflag`, `hashicorp/yamux`,
-  `klauspost/compress`, `pierrec/lz4/v4`, `go.opentelemetry.io/otel` (+ `sdk/log`, `exporters/otlp/otlplog/otlploghttp`,
-  `contrib/bridges/otelslog`). minisign verification is implemented in-repo on `crypto/ed25519` + `golang.org/x/crypto/blake2b`
+  `klauspost/compress`, `pierrec/lz4/v4`, `golang.org/x/term` (terminal detection), `go.opentelemetry.io/otel`
+  (+ `sdk/log`, `exporters/otlp/otlplog/otlploghttp`, `contrib/bridges/otelslog`). minisign verification is implemented in-repo on `crypto/ed25519` + `golang.org/x/crypto/blake2b`
   (for prehashed `ED` signatures).
 - All `zfs` (and `ps`, `id`) child processes run with `LC_ALL=C` so stderr classification is locale-independent, and
   with `PATH` extended by `/sbin:/usr/sbin:/usr/local/sbin:/bin:/usr/bin`.
@@ -659,7 +659,10 @@ FreeBSD port, moving data streams to separate SSH sessions.
 ## 14. Verification items (resolved during implementation by test, not by guess)
 
 1. Exact delegated permission set required by `zfs receive -F` (is `rollback` and/or `destroy` needed beyond
-   `receive`?) — determined by the Linux integration suite; §6.2 updated accordingly.
+   `receive`?) — determined by the Linux integration suite; §6.2 updated accordingly. *Still open:*
+   `TestITReceiveForcePermissions` (test/integration/perms_test.go) logs whether an unprivileged `receive -F` succeeds
+   without `rollback`, with the zfs stderr, without failing the run; record the observed outcome here and adjust §6.2
+   if `rollback` turns out not to be needed.
 2. yamux throughput through SSH on a 10 GbE-class link with the 16 MiB window — benchmark; tune window size.
 3. `zfs allow` output format differences across Linux/FreeBSD/illumos — captured as fixtures before writing the
    parser.

@@ -6,7 +6,7 @@
 
 **Architecture:** `internal/zfs` wraps the `zfs` CLI as argv calls; `internal/endpoint` exposes it as an `Endpoint` interface (with an in-memory fake); `internal/engine` gathers state, plans per dataset with a pure planner, and executes actions over two `Endpoint`s; `internal/app` wires CLI, logging, signals and exit codes. Remote endpoints (M2) plug in behind the same interface.
 
-**Tech Stack:** Go 1.27, `spf13/pflag`, `klauspost/compress`, `pierrec/lz4/v4`, `log/slog`, GitHub Actions.
+**Tech Stack:** Go 1.27, `spf13/pflag`, `klauspost/compress`, `pierrec/lz4/v4`, `golang.org/x/term`, `log/slog`, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-10-18-syngoid-design.md`
 
@@ -20,7 +20,7 @@
 
 - Module path `github.com/piotaixr/syngoid`; `go.mod` has `go 1.27`; `mise.toml` pins `go = "1.27.1"`.
 - `CGO_ENABLED=0` everywhere. Unix-only build targets: linux, freebsd, illumos, darwin.
-- Third-party dependencies in M1 are limited to `github.com/spf13/pflag`, `github.com/klauspost/compress`, `github.com/pierrec/lz4/v4`. Anything else requires a spec change.
+- Third-party dependencies in M1 are limited to `github.com/spf13/pflag`, `github.com/klauspost/compress`, `github.com/pierrec/lz4/v4`, `golang.org/x/term` (ruling R26). Anything else requires a spec change.
 - No shell strings for ZFS: every `zfs`/`ps`/`id` invocation is an argv slice. Child env sets `LC_ALL=C` and appends `:/sbin:/usr/sbin:/usr/local/sbin:/bin:/usr/bin` to `PATH`.
 - Console log prefixes exactly: `DEBUG: `, `INFO: ` (stdout); `WARNING: `, `CRITICAL ERROR: ` (stderr).
 - Compat names exactly: sync snapshot `syncoid_<identifier_><hostname>_YYYY-MM-DD:hh:mm:ss-GMT<sign>HH:MM`; hold tag `syncoid_<identifier_><hostname>`; property `syncoid:sync`.
