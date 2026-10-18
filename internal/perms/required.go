@@ -25,6 +25,7 @@ const (
 // Needs is the subset of options that determines the required permissions.
 type Needs struct {
 	NoSyncSnap, KeepSyncSnap, UseHold, CreateBookmark, NoRollback bool
+	NoStream                                                      bool
 	DeleteTargetSnapshots, ForceDelete, PreserveRecordsize        bool
 	RawSend                                                       bool
 	// Props are the properties that will be set on the target, in order.
@@ -56,6 +57,11 @@ func Required(side Side, n Needs) []Requirement {
 			add("destroy")
 			add("mount")
 		}
+		if !n.NoStream {
+			// zfs send -I places temporary holds on the snapshots it sends;
+			// the kernel releases them, so release is not needed.
+			add("hold")
+		}
 		if n.UseHold {
 			add("hold")
 			add("release")
@@ -72,9 +78,6 @@ func Required(side Side, n Needs) []Requirement {
 		add("receive", "receive:append")
 	} else {
 		add("receive")
-	}
-	if !n.NoRollback {
-		add("rollback")
 	}
 	if syncDestroy || n.DeleteTargetSnapshots || n.ForceDelete {
 		add("destroy")

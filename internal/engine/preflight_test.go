@@ -122,8 +122,8 @@ func TestPreflightSudo(t *testing.T) {
 
 func TestPreflightMissing(t *testing.T) {
 	e := newPfEnv()
-	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount")}
-	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,rollback,destroy")}
+	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,hold")}
+	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,destroy")}
 	r := e.run(t, e.src, e.dst)
 	if r.OK() {
 		t.Fatal("OK despite missing grants")
@@ -148,8 +148,8 @@ Alternatively, run with --sudo (requires a sudoers rule for zfs).
 
 func TestPreflightOK(t *testing.T) {
 	e := newPfEnv()
-	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy")}
-	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,receive,rollback,destroy")}
+	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy,hold")}
+	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,receive,destroy")}
 	r := e.run(t, e.src, e.dst)
 	if !r.OK() {
 		t.Fatalf("not OK: %+v", r)
@@ -171,9 +171,9 @@ func TestPreflightChecksEachDatasetAndAncestorOnce(t *testing.T) {
 		{Source: "tank/data/b", Target: "backup/data/b"},
 	}
 	cd := &pfEndpoint{Endpoint: e.dst}
-	srcAllow := allowFor("tank/data", "backup", "send,snapshot,mount,destroy")
+	srcAllow := allowFor("tank/data", "backup", "send,snapshot,mount,destroy,hold")
 	e.src.Faults.Allow = map[string]string{"tank/data": srcAllow, "tank/data/a": srcAllow, "tank/data/b": srcAllow}
-	e.dst.Faults.Allow = map[string]string{"backup/data": allowFor("backup/data", "backup", "create,mount,receive,rollback,destroy")}
+	e.dst.Faults.Allow = map[string]string{"backup/data": allowFor("backup/data", "backup", "create,mount,receive,destroy")}
 	r := e.run(t, e.src, cd)
 	if !r.OK() {
 		t.Fatalf("not OK: %+v", r)
@@ -191,8 +191,8 @@ func TestPreflightPreserveProps(t *testing.T) {
 	e.sw.SetProp("tank/data", "compression", "lz4")
 	e.sw.SetProp("tank/data", "atime", "off")
 	e.sw.SetProp("tank/data", "guid", "123")
-	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,receive,rollback,destroy")}
-	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy")}
+	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,receive,destroy")}
+	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy,hold")}
 	r := e.run(t, e.src, e.dst)
 	if r.OK() {
 		t.Fatal("OK despite missing property grants")
@@ -220,8 +220,8 @@ func TestPreflightPreservePropsUserAndUnprivLinux(t *testing.T) {
 	e.sw.SetProp("tank/data", "canmount", "on")
 	e.sw.SetProp("tank/data", "compression", "lz4")
 	e.sw.SetProp("tank/data", "org:note", "hi")
-	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,receive,rollback,destroy")}
-	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy")}
+	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,receive,destroy")}
+	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy,hold")}
 	r := e.run(t, e.src, e.dst)
 	var got []string
 	for _, m := range r.Sides[1].Missing[0].Missing {
@@ -250,14 +250,14 @@ func TestNeedsFrom(t *testing.T) {
 
 func TestPreflightRenderFull(t *testing.T) {
 	e := newPfEnv()
-	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy")}
-	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,receive,rollback,destroy")}
+	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy,hold")}
+	e.dst.Faults.Allow = map[string]string{"backup": allowFor("backup", "backup", "create,mount,receive,destroy")}
 	r := e.run(t, e.src, e.dst)
 	var buf bytes.Buffer
 	r.Render(&buf, true)
 	want := `Full minimal grants:
-  [source]  zfs allow -u backup send,snapshot,mount,destroy tank/data
-  [target]  zfs allow -u backup create,mount,receive,rollback,destroy backup
+  [source]  zfs allow -u backup send,snapshot,mount,destroy,hold tank/data
+  [target]  zfs allow -u backup create,mount,receive,destroy backup
 `
 	if buf.String() != want {
 		t.Errorf("Render =\n%s\nwant\n%s", buf.String(), want)
@@ -280,9 +280,9 @@ func TestPreflightMissingFullAndLabels(t *testing.T) {
 	r.Render(&buf, true)
 	out := buf.String()
 	for _, want := range []string{
-		"  target backup/data: create, mount, receive, rollback, destroy\n",
-		"  [backup@nas]  zfs allow -u backup create,mount,receive,rollback,destroy backup\n",
-		"Full minimal grants:\n  [source]  zfs allow -u backup send,snapshot,mount,destroy tank/data\n  [backup@nas]  zfs allow",
+		"  target backup/data: create, mount, receive, destroy\n",
+		"  [backup@nas]  zfs allow -u backup create,mount,receive,destroy backup\n",
+		"Full minimal grants:\n  [source]  zfs allow -u backup send,snapshot,mount,destroy,hold tank/data\n  [backup@nas]  zfs allow",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
@@ -297,8 +297,8 @@ func allowScoped(ds, user, perms, scope string) string {
 }
 
 func TestPreflightAbsentTargetNeedsDescendentGrant(t *testing.T) {
-	const perms = "create,mount,receive,rollback,destroy"
-	srcAllow := map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy")}
+	const perms = "create,mount,receive,destroy"
+	srcAllow := map[string]string{"tank/data": allowFor("tank/data", "backup", "send,snapshot,mount,destroy,hold")}
 	for _, tc := range []struct {
 		name   string
 		target string

@@ -297,8 +297,8 @@ func TestMainPermissionsCommand(t *testing.T) {
 
 	se := newSyncEnv(t, info)
 	se.ep.Faults.Allow = map[string]string{
-		"tank/data": allowOutput("tank/data", "backup", "send,snapshot,mount,destroy"),
-		"backup":    allowOutput("backup", "backup", "create,mount,receive,rollback,destroy"),
+		"tank/data": allowOutput("tank/data", "backup", "send,snapshot,mount,destroy,hold"),
+		"backup":    allowOutput("backup", "backup", "create,mount,receive,destroy"),
 	}
 	if got := se.run("permissions", "tank/data", "backup/data"); got != 0 {
 		t.Fatalf("complete: exit code = %d, want 0; stderr %q", got, se.stderr)

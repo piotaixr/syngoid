@@ -104,15 +104,11 @@ func TestITUnprivLinuxReceiveUnmounted(t *testing.T) {
 	}
 }
 
-// TestITReceiveForcePermissions observes spec §14 item 1: does an
-// unprivileged `zfs receive -F` that must roll the target back need the
-// `rollback` delegation on top of create,mount,receive,destroy?
-// perms.Required assumes it does. Per ruling R30 the observation never
-// fails the test: it is logged (with the zfs stderr) for §14 item 1. The
-// test drives zfs directly, since syngoid's preflight would refuse to run
-// without rollback. It does require that the receive succeeds once
-// rollback is delegated too, and that perms.Required(Target) keeps
-// demanding rollback.
+// TestITReceiveForcePermissions pins spec §14 item 1: an unprivileged
+// `zfs receive -F` that must roll the target back needs no `rollback`
+// delegation on top of create,mount,receive,destroy (first observed in CI on
+// OpenZFS), so perms.Required(Target) must not demand it. The test drives zfs
+// directly to isolate the receive.
 func TestITReceiveForcePermissions(t *testing.T) {
 	begin(t)
 	src, parent := srcPool+"/rf", dstPool+"/rf"
@@ -144,35 +140,21 @@ func TestITReceiveForcePermissions(t *testing.T) {
 	// The receive syngoid runs on an unprivileged Linux target (spec §8.6).
 	recvF := []string{"receive", "-s", "-F", "-u", dst}
 	stderr, err = pipeZFS(t, send, itUser, recvF, 0)
-	if err == nil {
-		t.Logf("spec §14 item 1 observed: `zfs %s` SUCCEEDED for %s with only create,mount,receive,destroy "+
-			"delegated (rollback not needed). stderr:\n%s"+
-			"Record this outcome in spec §14 item 1.", strings.Join(recvF, " "), itUser, stderr)
-		// Undo the receive so the rollback-granted run below has the same work.
-		zfs(t, "destroy", dst+"@s2")
-		zfs(t, "mount", dst)
-		modifyTarget()
-	} else {
-		t.Logf("spec §14 item 1 observed: without the rollback permission `zfs %s` FAILED (%v), stderr:\n%s"+
-			"Record this outcome in spec §14 item 1.", strings.Join(recvF, " "), err, stderr)
-	}
-
-	zfs(t, "allow", "-u", itUser, "rollback", parent)
-	stderr, err = pipeZFS(t, send, itUser, recvF, 0)
 	if err != nil {
-		t.Fatalf("`zfs %s` still fails with rollback delegated too (%v): %s\nAnother permission is missing: "+
-			"update perms.Required and spec §6.2 / §14 item 1 accordingly.", strings.Join(recvF, " "), err, stderr)
+		t.Fatalf("`zfs %s` failed for %s with create,mount,receive,destroy delegated (%v): %s\n"+
+			"Another permission is needed: update perms.Required and spec §6.2 / §14 item 1.",
+			strings.Join(recvF, " "), itUser, err, stderr)
 	}
 	if g, w := prop(t, dst+"@s2", "guid"), prop(t, src+"@s2", "guid"); g != w {
 		t.Fatalf("guid of %s@s2 = %s, want %s", dst, g, w)
 	}
 
-	// The preflight must keep demanding what zfs requires.
+	// The preflight must not demand more than zfs requires.
 	var names []string
 	for _, r := range perms.Required(perms.Target, perms.Needs{}) {
 		names = append(names, r.AnyOf...)
 	}
-	if !slices.Contains(names, "rollback") {
-		t.Fatalf("perms.Required(Target) = %q lacks rollback, which zfs receive -F needs", names)
+	if slices.Contains(names, "rollback") {
+		t.Fatalf("perms.Required(Target) = %q demands rollback, which zfs receive -F does not need", names)
 	}
 }

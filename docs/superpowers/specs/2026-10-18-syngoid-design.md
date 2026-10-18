@@ -286,10 +286,10 @@ failure.
 | Source | always | `send` (with `w` in `--sendoptions`, `send:raw` or `send:encrypted` also satisfies) |
 | Source | not `--no-sync-snap` | `snapshot`, `mount` |
 | Source | not `--no-sync-snap` and not `--keep-sync-snap` | `destroy`, `mount` |
+| Source | not `--no-stream` | `hold` (`zfs send -I` places temporary holds, released by the kernel — see §14) |
 | Source | `--use-hold` | `hold`, `release` |
 | Source | `--create-bookmark` | `bookmark` |
 | Target | always | `create`, `mount`, and `receive` (or `receive:append` if `--no-rollback`) |
-| Target | not `--no-rollback` | `rollback` *(initial assumption, confirmed by integration test — see §14)* |
 | Target | not `--no-sync-snap` and not `--keep-sync-snap`; or `--delete-target-snapshots`; or `--force-delete` | `destroy`, `mount` |
 | Target | `--use-hold` | `hold`, `release` |
 | Target | `--preserve-recordsize` | `recordsize` |
@@ -658,11 +658,12 @@ FreeBSD port, moving data streams to separate SSH sessions.
 
 ## 14. Verification items (resolved during implementation by test, not by guess)
 
-1. Exact delegated permission set required by `zfs receive -F` (is `rollback` and/or `destroy` needed beyond
-   `receive`?) — determined by the Linux integration suite; §6.2 updated accordingly. *Still open:*
-   `TestITReceiveForcePermissions` (test/integration/perms_test.go) logs whether an unprivileged `receive -F` succeeds
-   without `rollback`, with the zfs stderr, without failing the run; record the observed outcome here and adjust §6.2
-   if `rollback` turns out not to be needed.
+1. Exact delegated permission set required by `zfs receive -F` — *resolved by the first Linux CI run (OpenZFS on
+   ubuntu-latest):* an unprivileged `zfs receive -s -F -u` that rolls the target back succeeds with only
+   `create,mount,receive,destroy`; `rollback` is not needed and was removed from §6.2. The same run showed that
+   `zfs send -I` fails with `cannot hold: permission denied` without the `hold` delegation on the source (the default
+   incremental mode takes temporary holds), so §6.2 now requires `hold` unless `--no-stream`.
+   `TestITReceiveForcePermissions` and `TestITPreflightPrintsWorkingGrant` pin both outcomes.
 2. yamux throughput through SSH on a 10 GbE-class link with the 16 MiB window — benchmark; tune window size.
 3. `zfs allow` output format differences across Linux/FreeBSD/illumos — captured as fixtures before writing the
    parser.
