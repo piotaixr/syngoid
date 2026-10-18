@@ -104,13 +104,15 @@ func TestITUnprivLinuxReceiveUnmounted(t *testing.T) {
 	}
 }
 
-// TestITReceiveForcePermissions answers spec §14 item 1: does an
+// TestITReceiveForcePermissions observes spec §14 item 1: does an
 // unprivileged `zfs receive -F` that must roll the target back need the
 // `rollback` delegation on top of create,mount,receive,destroy?
-// perms.Required currently assumes it does (ruling R28). The test drives
-// zfs directly, since syngoid's preflight would refuse to run without
-// rollback, and fails with follow-up instructions if the assumption is
-// wrong. Either way it logs the observed zfs stderr for §14 item 1.
+// perms.Required assumes it does. Per ruling R30 the observation never
+// fails the test: it is logged (with the zfs stderr) for §14 item 1. The
+// test drives zfs directly, since syngoid's preflight would refuse to run
+// without rollback. It does require that the receive succeeds once
+// rollback is delegated too, and that perms.Required(Target) keeps
+// demanding rollback.
 func TestITReceiveForcePermissions(t *testing.T) {
 	begin(t)
 	src, parent := srcPool+"/rf", dstPool+"/rf"
@@ -122,11 +124,15 @@ func TestITReceiveForcePermissions(t *testing.T) {
 	writeRandomFile(t, filepath.Join(mountpoint(t, src), "data"), 1<<20)
 	zfs(t, "snapshot", src+"@s2")
 
-	// Modify the target after its newest snapshot, so only a receive with
-	// -F (rolling the target back) can apply the increment. Then unmount
-	// it: the unprivileged receive must not need to mount anything.
-	writeRandomFile(t, filepath.Join(mountpoint(t, dst), "local-change"), 1<<20)
-	zfs(t, "unmount", dst)
+	// modifyTarget changes the target after its newest snapshot, so only a
+	// receive with -F (rolling the target back) can apply the increment.
+	// Then it unmounts it: the unprivileged receive must not need to mount
+	// anything.
+	modifyTarget := func() {
+		writeRandomFile(t, filepath.Join(mountpoint(t, dst), "local-change"), 1<<20)
+		zfs(t, "unmount", dst)
+	}
+	modifyTarget()
 	zfs(t, "allow", "-u", itUser, "create,mount,receive,destroy", parent)
 
 	send := []string{"send", "-i", src + "@s1", src + "@s2"}
@@ -139,14 +145,17 @@ func TestITReceiveForcePermissions(t *testing.T) {
 	recvF := []string{"receive", "-s", "-F", "-u", dst}
 	stderr, err = pipeZFS(t, send, itUser, recvF, 0)
 	if err == nil {
-		t.Fatalf("spec §14 item 1 resolved: `zfs %s` succeeded for %s with only create,mount,receive,destroy delegated, "+
-			"so the rollback permission is NOT needed.\nFollow-up: remove the Target `rollback` requirement from "+
-			"perms.Required (internal/perms/required.go and its test), drop the rollback row of spec §6.2, record "+
-			"this outcome in spec §14 item 1, then make this test expect success.",
-			strings.Join(recvF, " "), itUser)
+		t.Logf("spec §14 item 1 observed: `zfs %s` SUCCEEDED for %s with only create,mount,receive,destroy "+
+			"delegated (rollback not needed). stderr:\n%s"+
+			"Record this outcome in spec §14 item 1.", strings.Join(recvF, " "), itUser, stderr)
+		// Undo the receive so the rollback-granted run below has the same work.
+		zfs(t, "destroy", dst+"@s2")
+		zfs(t, "mount", dst)
+		modifyTarget()
+	} else {
+		t.Logf("spec §14 item 1 observed: without the rollback permission `zfs %s` FAILED (%v), stderr:\n%s"+
+			"Record this outcome in spec §14 item 1.", strings.Join(recvF, " "), err, stderr)
 	}
-	t.Logf("spec §14 item 1 observed: without the rollback permission `zfs %s` failed (%v), stderr:\n%s"+
-		"Record this stderr in spec §14 item 1.", strings.Join(recvF, " "), err, stderr)
 
 	zfs(t, "allow", "-u", itUser, "rollback", parent)
 	stderr, err = pipeZFS(t, send, itUser, recvF, 0)
