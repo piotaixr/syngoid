@@ -7,7 +7,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -143,5 +148,64 @@ func TestOSExecDebugLog(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), logx.KeyHost) {
 		t.Errorf("host attr should be omitted: %q", buf.String())
+	}
+}
+
+func TestOSExecResolvesBareNameThroughExtraDirs(t *testing.T) {
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "syngoid-fake-tool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\necho found\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/nonexistent-syngoid-dir")
+
+	var out bytes.Buffer
+	err := OSExec{extraDirs: []string{dir}}.Run(context.Background(), Cmd{Argv: []string{"syngoid-fake-tool"}, Stdout: &out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "found\n" {
+		t.Errorf("stdout = %q", out.String())
+	}
+
+	// Without the extra dir the same name must not resolve.
+	err = OSExec{extraDirs: []string{"/nonexistent-syngoid-extra"}}.Run(context.Background(), Cmd{Argv: []string{"syngoid-fake-tool"}})
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Errorf("err = %v, want exec.ErrNotFound", err)
+	}
+}
+
+func TestOSExecCancelEscalatesToGroupKill(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	// Both the shell and its sleep child ignore SIGTERM (ignored signals are
+	// inherited), so only the SIGKILL escalation can stop them.
+	script := `trap '' TERM; sleep 60 & echo $! > "$1"; wait`
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := OSExec{grace: 200 * time.Millisecond}.Run(ctx, Cmd{Argv: []string{"sh", "-c", script, "sh", pidFile}})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want DeadlineExceeded", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("Run took %v", d)
+	}
+
+	raw, rerr := os.ReadFile(pidFile)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	pid, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("grandchild %d survived cancellation", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

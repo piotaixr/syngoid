@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -19,10 +20,13 @@ import (
 )
 
 const (
-	stderrCap = 64 * 1024
-	waitDelay = 10 * time.Second
-	pathExtra = ":/sbin:/usr/sbin:/usr/local/sbin:/bin:/usr/bin"
+	stderrCap    = 64 * 1024
+	defaultGrace = 10 * time.Second
 )
+
+// defaultExtraDirs are appended to the child's PATH (and used to resolve a
+// bare argv[0]) so zfs is found under a minimal parent PATH such as cron's.
+var defaultExtraDirs = []string{"/sbin", "/usr/sbin", "/usr/local/sbin", "/bin", "/usr/bin"}
 
 // Cmd is a single command invocation expressed as an argv slice.
 type Cmd struct {
@@ -63,6 +67,10 @@ func (e *CommandError) Unwrap() error { return e.Kind }
 type OSExec struct {
 	Log  *slog.Logger
 	Host string
+
+	// Test hooks; zero values select the production defaults.
+	grace     time.Duration // SIGTERM to SIGKILL escalation delay (default 10 s)
+	extraDirs []string      // directories appended to PATH (default defaultExtraDirs)
 }
 
 // cappedBuffer keeps at most max bytes and silently drops the rest.
@@ -78,8 +86,12 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Run executes c.Argv in its own process group. On context cancellation the
-// whole group receives SIGTERM, and SIGKILL after a 10 s grace period.
+// Run executes c.Argv in its own process group. A bare argv[0] is resolved
+// against the parent PATH extended with the system sbin/bin directories. On
+// context cancellation the whole group receives SIGTERM and, if the command
+// has not finished after the grace period (10 s), SIGKILL; once Run returns
+// after a cancellation any remaining group member is killed too, so no
+// orphans are left behind.
 func (o OSExec) Run(ctx context.Context, c Cmd) error {
 	if len(c.Argv) == 0 {
 		return errors.New("zfs: empty argv")
@@ -92,15 +104,41 @@ func (o OSExec) Run(ctx context.Context, c Cmd) error {
 		o.Log.Debug(strings.Join(c.Argv, " "), attrs...)
 	}
 
-	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	cmd.Env = withPath(cmd.Env)
+	dirs := o.extraDirs
+	if dirs == nil {
+		dirs = defaultExtraDirs
+	}
+	grace := o.grace
+	if grace == 0 {
+		grace = defaultGrace
+	}
+
+	env := withPath(append(os.Environ(), "LC_ALL=C"), dirs)
+	path := c.Argv[0]
+	if !strings.Contains(path, "/") {
+		resolved, err := lookPath(path, envPath(env))
+		if err != nil {
+			return fmt.Errorf("%s: %w", strings.Join(c.Argv, " "), err)
+		}
+		path = resolved
+	}
+
+	cmd := exec.CommandContext(ctx, path, c.Argv[1:]...)
+	cmd.Args[0] = c.Argv[0]
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var escalate *time.Timer
 	cmd.Cancel = func() error {
 		// Setpgid makes the child its own group leader, so pgid == pid.
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		pgid := cmd.Process.Pid
+		err := killGroup(pgid, syscall.SIGTERM)
+		if err == nil {
+			escalate = time.AfterFunc(grace, func() { _ = killGroup(pgid, syscall.SIGKILL) })
+		}
+		return err
 	}
-	cmd.WaitDelay = waitDelay
+	// Backstop only: the group SIGKILL above normally closes the pipes first.
+	cmd.WaitDelay = grace + 2*time.Second
 	cmd.Stdin = c.Stdin
 	if c.Stdout != nil {
 		cmd.Stdout = c.Stdout
@@ -111,11 +149,18 @@ func (o OSExec) Run(ctx context.Context, c Cmd) error {
 	cmd.Stderr = stderr
 
 	err := cmd.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil && cmd.Process != nil {
+		// Cancelled: reap any group member that outlived the leader.
+		if escalate != nil {
+			escalate.Stop()
+		}
+		_ = killGroup(cmd.Process.Pid, syscall.SIGKILL)
+		if err != nil {
+			return fmt.Errorf("%s: %w", strings.Join(c.Argv, " "), ctxErr)
+		}
+	}
 	if err == nil {
 		return nil
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return fmt.Errorf("%s: %w", strings.Join(c.Argv, " "), ctxErr)
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
@@ -125,13 +170,48 @@ func (o OSExec) Run(ctx context.Context, c Cmd) error {
 	return fmt.Errorf("%s: %w", strings.Join(c.Argv, " "), err)
 }
 
-// withPath returns env with the extra system directories appended to PATH.
-func withPath(env []string) []string {
+// killGroup signals the process group pgid. A vanished group is reported as
+// os.ErrProcessDone, matching os.Process.Signal.
+func killGroup(pgid int, sig syscall.Signal) error {
+	err := syscall.Kill(-pgid, sig)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	return err
+}
+
+// envPath returns the value of PATH in env.
+func envPath(env []string) string {
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// lookPath finds an executable named name in the colon-separated path.
+func lookPath(name, path string) (string, error) {
+	for _, dir := range filepath.SplitList(path) {
+		if dir == "" {
+			dir = "."
+		}
+		p := filepath.Join(dir, name)
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%w: %q in PATH", exec.ErrNotFound, name)
+}
+
+// withPath returns env with dirs appended to PATH (added if absent).
+func withPath(env []string, dirs []string) []string {
+	extra := strings.Join(dirs, ":")
 	for i, kv := range env {
 		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
-			env[i] = "PATH=" + v + pathExtra
+			env[i] = "PATH=" + v + ":" + extra
 			return env
 		}
 	}
-	return append(env, "PATH="+strings.TrimPrefix(pathExtra, ":"))
+	return append(env, "PATH="+extra)
 }
