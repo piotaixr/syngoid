@@ -26,7 +26,7 @@ func checkReq(t *testing.T, got []Requirement, want []string) {
 
 func TestRequiredSourceDefault(t *testing.T) {
 	got := Required(Source, Needs{})
-	checkReq(t, got, []string{"send", "snapshot", "mount", "destroy"})
+	checkReq(t, got, []string{"send", "snapshot", "mount", "destroy", "hold"})
 	if !reflect.DeepEqual(got[0].AnyOf, []string{"send"}) {
 		t.Errorf("send AnyOf = %v", got[0].AnyOf)
 	}
@@ -44,14 +44,24 @@ func TestRequiredSourceRaw(t *testing.T) {
 }
 
 func TestRequiredSourceNoSyncSnap(t *testing.T) {
-	checkReq(t, Required(Source, Needs{NoSyncSnap: true}), []string{"send"})
+	checkReq(t, Required(Source, Needs{NoSyncSnap: true}), []string{"send", "hold"})
 	checkReq(t, Required(Source, Needs{NoSyncSnap: true, CreateBookmark: true, UseHold: true}),
 		[]string{"send", "hold", "release", "bookmark"})
-	checkReq(t, Required(Source, Needs{KeepSyncSnap: true}), []string{"send", "snapshot", "mount"})
+	checkReq(t, Required(Source, Needs{KeepSyncSnap: true}), []string{"send", "snapshot", "mount", "hold"})
 }
 
+// zfs send -I (the default without --no-stream) takes temporary holds, so the
+// source needs hold; plain -i and full sends do not.
+func TestRequiredSourceNoStream(t *testing.T) {
+	checkReq(t, Required(Source, Needs{NoStream: true}), []string{"send", "snapshot", "mount", "destroy"})
+	checkReq(t, Required(Source, Needs{NoStream: true, UseHold: true}),
+		[]string{"send", "snapshot", "mount", "destroy", "hold", "release"})
+}
+
+// zfs receive -F needs no rollback delegation (observed on OpenZFS, spec §14
+// item 1).
 func TestRequiredTargetDefault(t *testing.T) {
-	checkReq(t, Required(Target, Needs{}), []string{"create", "mount", "receive", "rollback", "destroy"})
+	checkReq(t, Required(Target, Needs{}), []string{"create", "mount", "receive", "destroy"})
 }
 
 func TestRequiredTargetNoRollbackKeep(t *testing.T) {
@@ -79,21 +89,21 @@ func TestRequiredTargetProps(t *testing.T) {
 		PreserveRecordsize: true, Props: []string{"compression", "atime"}, UserProps: true, UseHold: true,
 	})
 	checkReq(t, got, []string{
-		"create", "mount", "receive", "rollback", "destroy", "hold", "release",
+		"create", "mount", "receive", "destroy", "hold", "release",
 		"recordsize", "compression", "atime", "userprop",
 	})
 }
 
 func TestRequiredDeduplicates(t *testing.T) {
 	got := Required(Target, Needs{Props: []string{"mount", "compression", "compression", "destroy"}})
-	checkReq(t, got, []string{"create", "mount", "receive", "rollback", "destroy", "compression"})
+	checkReq(t, got, []string{"create", "mount", "receive", "destroy", "compression"})
 }
 
 func TestMissing(t *testing.T) {
 	have := map[string]bool{"send:raw": true, "snapshot": true, "mount": true}
 	req := Required(Source, Needs{RawSend: true})
-	checkReq(t, Missing(have, req), []string{"destroy"})
-	checkReq(t, Missing(map[string]bool{"send": true, "snapshot": true, "mount": true, "destroy": true}, req), nil)
+	checkReq(t, Missing(have, req), []string{"destroy", "hold"})
+	checkReq(t, Missing(map[string]bool{"send": true, "snapshot": true, "mount": true, "destroy": true, "hold": true}, req), nil)
 }
 
 func TestGrantCommand(t *testing.T) {

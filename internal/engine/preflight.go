@@ -61,7 +61,7 @@ func (r PreflightReport) OK() bool {
 func NeedsFrom(o *cli.Options, props []string, userProps bool) perms.Needs {
 	n := perms.Needs{
 		NoSyncSnap: o.NoSyncSnap, KeepSyncSnap: o.KeepSyncSnap, UseHold: o.UseHold,
-		CreateBookmark: o.CreateBookmark, NoRollback: o.NoRollback,
+		CreateBookmark: o.CreateBookmark, NoRollback: o.NoRollback, NoStream: o.NoStream,
 		DeleteTargetSnapshots: o.DeleteTargetSnapshots, ForceDelete: o.ForceDelete,
 		PreserveRecordsize: o.PreserveRecordsize,
 		RawSend:            slices.ContainsFunc(o.SendOpts, func(op zfs.Opt) bool { return op.Flag == 'w' }),
