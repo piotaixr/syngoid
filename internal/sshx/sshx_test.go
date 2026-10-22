@@ -50,7 +50,7 @@ func TestMasterArgv(t *testing.T) {
 	}
 	wantMaster := []string{
 		"ssh", "-F", "/c", "-o", "ControlPath=/d/cm-0", "-n", "-o", "ControlMaster=yes", "-o", "ControlPersist=60",
-		"-o", "Port=2222", "-T", "--", "backup@nas", "exit",
+		"-o", "Port=2222", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4", "-T", "--", "backup@nas", "exit",
 	}
 	if got := m.masterArgv(); !slices.Equal(got, wantMaster) {
 		t.Errorf("master argv =\n %q\nwant\n %q", got, wantMaster)
@@ -144,6 +144,38 @@ func TestBatchMode(t *testing.T) {
 	mo, _ := NewMaster(Config{Options: []string{"SendEnv=batchmode"}}, "u", "h", "/d", 0)
 	if !slices.Contains(mo.masterArgv(), "BatchMode=yes") {
 		t.Errorf("unrelated option suppressed BatchMode")
+	}
+}
+
+func TestServerAlive(t *testing.T) {
+	idx := func(a []string, s string) int { return slices.Index(a, s) }
+
+	// Default: the master detects a dead link within ~60 s. The values follow
+	// the user options, so a user ServerAliveCountMax still wins.
+	m, _ := NewMaster(Config{Options: []string{"Port=1", "ServerAliveCountMax=9"}, StdinIsTTY: true}, "u", "h", "/d", 0)
+	argv := m.masterArgv()
+	i, c := idx(argv, "ServerAliveInterval=15"), idx(argv, "ServerAliveCountMax=4")
+	if i < 0 || c < 0 || argv[i-1] != "-o" || argv[c-1] != "-o" {
+		t.Fatalf("master lacks ServerAlive options: %q", argv)
+	}
+	if i < idx(argv, "ServerAliveCountMax=9") || i > idx(argv, "-T") || c > idx(argv, "-T") {
+		t.Errorf("ServerAlive options must follow the user's: %q", argv)
+	}
+	// Clients share the master's connection and get none of ours.
+	if ca := m.clientArgv("x"); slices.Contains(ca, "ServerAliveInterval=15") || slices.Contains(ca, "ServerAliveCountMax=4") {
+		t.Errorf("client argv has our ServerAlive options: %q", ca)
+	}
+
+	// A user ServerAliveInterval option (any case, either syntax) replaces ours.
+	for _, opt := range []string{"ServerAliveInterval=30", "serveraliveinterval 0", "SERVERALIVEINTERVAL=5"} {
+		m, _ := NewMaster(Config{Options: []string{opt}}, "u", "h", "/d", 0)
+		argv := m.masterArgv()
+		if slices.Contains(argv, "ServerAliveInterval=15") || slices.Contains(argv, "ServerAliveCountMax=4") {
+			t.Errorf("option %q: our ServerAlive options still added: %q", opt, argv)
+		}
+		if !slices.Contains(argv, opt) || !slices.Contains(argv, "BatchMode=yes") {
+			t.Errorf("option %q: user option or BatchMode missing: %q", opt, argv)
+		}
 	}
 }
 

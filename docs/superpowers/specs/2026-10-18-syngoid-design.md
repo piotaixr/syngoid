@@ -224,7 +224,9 @@ For each remote host the initiator starts one OpenSSH ControlMaster
 syncoid does today — so probe, push, and `serve` reuse a single authenticated connection (one password prompt / hardware-key touch). The
 master runs with `-n` (stdin belongs to the caller, e.g. a `while read` loop; ssh prompts on `/dev/tty`) and is
 closed with `ssh -O exit` at the end of the run. User `-o` options and `--ssh-config` are passed to every
-invocation. `-o BatchMode=yes` is added when stdin is not a TTY unless the user passed a `BatchMode` option.
+invocation. `-o BatchMode=yes` is added when stdin is not a TTY unless the user passed a `BatchMode` option. The
+master also gets `-o ServerAliveInterval=15 -o ServerAliveCountMax=4` unless the user passed a `ServerAliveInterval`
+option (§7.1).
 
 ### 5.2 Probe
 
@@ -359,8 +361,8 @@ Exit code 2; nothing is modified.
   for the request with the same `id`. `hello` (§7.2) is the first request, with id 1.
 - **Data streams:** for `Send`/`Receive`, the initiator opens a new yamux stream whose first line is
   `{"request_id":N}`; the remainder is the raw (codec-encoded) ZFS stream.
-- yamux configuration: `MaxStreamWindowSize` 16 MiB initially (tunable constant), yamux keepalive disabled (SSH and
-  stream EOF handle liveness).
+- yamux configuration: `MaxStreamWindowSize` 16 MiB initially (tunable constant), yamux keepalive disabled: ssh
+  `ServerAlive` on the initiator's master (§5.1) detects a silent drop within ~60 s, and stream EOF does the rest.
 
 ### 7.2 Handshake
 
@@ -379,7 +381,9 @@ must not start with `-` (argv-injection guard).
 
 - Each `zfs` child runs in its own process group. When the agent's stdin reaches EOF (initiator exit, `kill -9`,
   network drop → sshd closes the channel), the agent kills all child process groups and exits. This prevents orphan
-  `zfs receive` processes that would mark the target busy.
+  `zfs receive` processes that would mark the target busy. sshd only notices a silent network drop through its own
+  keepalive, so remotes should set `ClientAliveInterval` (e.g. 15 s with `ClientAliveCountMax` 4) to bound how long
+  an orphaned agent and its `zfs receive` live.
 - The agent ignores SIGPIPE, so a dropped connection surfaces as a failed write, and treats SIGHUP like stdin EOF
   (same cleanup, then exit).
 - Agent log output is sent as `Event{kind:"log"}`; the agent never writes to its own stderr after the mux is up.

@@ -138,27 +138,31 @@ func validName(s string, isUser bool) bool {
 // Label is "user@host" or "host".
 func (m *Master) Label() string { return m.label }
 
-// argv builds the ssh command line. control holds our own options, placed
-// before the user's; when ownBatch is true they already include BatchMode.
-func (m *Master) argv(control []string, ownBatch bool, remote string) []string {
+// argv builds the ssh command line. ssh keeps the first value of each
+// option: control holds our own options, placed before the user's so they
+// win; defaults follow the user's, so a user option wins over them.
+func (m *Master) argv(control, defaults []string, remote string) []string {
 	a := []string{m.cfg.SSH}
 	if m.cfg.ConfigFile != "" {
 		a = append(a, "-F", m.cfg.ConfigFile)
 	}
-	// Ours first: ssh keeps the first value of each option.
 	a = append(a, "-o", "ControlPath="+m.ctlp)
 	a = append(a, control...)
-	batch := !ownBatch && !m.cfg.StdinIsTTY
 	for _, o := range m.cfg.Options {
 		a = append(a, "-o", o)
-		if optionKey(o) == "batchmode" {
-			batch = false
+	}
+	a = append(a, defaults...)
+	return append(a, "-T", "--", m.dest, remote)
+}
+
+// userSets reports whether a user option sets key (lower case).
+func (m *Master) userSets(key string) bool {
+	for _, o := range m.cfg.Options {
+		if optionKey(o) == key {
+			return true
 		}
 	}
-	if batch {
-		a = append(a, "-o", "BatchMode=yes")
-	}
-	return append(a, "-T", "--", m.dest, remote)
+	return false
 }
 
 // optionKey returns the lower-cased key of an ssh "Key=Value" / "Key Value" option.
@@ -171,15 +175,24 @@ func optionKey(o string) string {
 }
 
 func (m *Master) masterArgv() []string {
+	var defaults []string
+	if !m.cfg.StdinIsTTY && !m.userSets("batchmode") {
+		defaults = append(defaults, "-o", "BatchMode=yes")
+	}
+	// yamux keepalive is off: ServerAlive on the master, shared by every mux
+	// client, detects a silent network drop within ~60 s.
+	if !m.userSets("serveraliveinterval") {
+		defaults = append(defaults, "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4")
+	}
 	// -n: the master never reads stdin, which belongs to the caller (e.g. a
 	// `while read` loop); ssh prompts on /dev/tty, not stdin.
-	return m.argv([]string{"-n", "-o", "ControlMaster=yes", "-o", "ControlPersist=60"}, false, "exit")
+	return m.argv([]string{"-n", "-o", "ControlMaster=yes", "-o", "ControlPersist=60"}, defaults, "exit")
 }
 
 func (m *Master) clientArgv(cmd string) []string {
 	// A mux client never authenticates; BatchMode keeps it from blocking on
 	// a password prompt if the master is gone.
-	return m.argv([]string{"-o", "ControlMaster=no", "-o", "BatchMode=yes"}, true, cmd)
+	return m.argv([]string{"-o", "ControlMaster=no", "-o", "BatchMode=yes"}, nil, cmd)
 }
 
 func (m *Master) exitArgv() []string {

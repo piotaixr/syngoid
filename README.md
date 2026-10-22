@@ -38,6 +38,10 @@ remediation, recursion, clones, bookmarks, holds, pruning, preflight permission 
   agent itself never runs under sudo.
 - **Compression.** `--compress` applies to the stream whenever a side is remote and is ignored for local → local.
 - A failed connection, push or handshake is a global failure: exit code 2.
+- **Dropped links.** The ssh master runs with `-o ServerAliveInterval=15 -o ServerAliveCountMax=4` (unless you pass
+  your own `-o ServerAliveInterval=…`), so a silent network drop fails the run within about a minute. Set
+  `ClientAliveInterval` (e.g. `15`) in the remote's `sshd_config` as well, so the remote agent and its `zfs receive`
+  are stopped as quickly instead of after TCP gives up.
 
 Not yet available (milestone 3): `syngoid fetch`, release downloads (`--no-download`, `--download-url`) and OTLP
 export (`--otel-endpoint`); the flags are accepted but have no effect yet.
