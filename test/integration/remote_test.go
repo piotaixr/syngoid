@@ -154,8 +154,9 @@ func TestITRemoteSudo(t *testing.T) {
 	target := remoteLoc(itUser, dst)
 
 	// No grants anywhere: the delegation preflight refuses without --target-sudo.
-	if r := syngoid(t, src, target); r.code != 2 {
-		t.Fatalf("syngoid without grants or --target-sudo: exit %d, want 2", r.code)
+	// (A failed ssh would exit 2 as well, hence the message.)
+	if r := syngoid(t, src, target); r.code != 2 || !strings.Contains(r.stderr, "missing ZFS permissions") {
+		t.Fatalf("syngoid without grants or --target-sudo: exit %d, want 2 with missing ZFS permissions", r.code)
 	}
 	// With it the agent runs `sudo -n zfs`, allowed by the sudoers rule.
 	syngoidOK(t, "--target-sudo", src, target)

@@ -810,36 +810,16 @@ func beginRemote(t *testing.T) {
 var remoteGrantLine = regexp.MustCompile(`(?m)^\s+\[` + remoteHost + `\]\s+(zfs allow .*\S)\s*$`)
 
 // grantFromRemotePreflight runs syngoid as root with args, which must fail
-// the preflight on its remote sides (exit 2), then runs the printed `zfs
-// allow` commands as root. A grant for anything but a child of a test pool
-// fails the test, so no test ever delegates on a pool's root dataset. It
-// returns the failed run.
+// the preflight on its remote sides (exit 2) with a grant line per remote
+// side, then runs the printed `zfs allow` commands as root (see
+// runPrintedGrants). It returns the failed run.
 func grantFromRemotePreflight(t *testing.T, args ...string) result {
 	t.Helper()
 	r := syngoid(t, args...)
-	if r.code != 2 || !strings.Contains(r.stderr, "missing ZFS permissions") {
-		t.Fatalf("syngoid without grants: exit %d, want 2 with missing ZFS permissions", r.code)
-	}
 	if !strings.Contains(r.stderr, "  ["+remoteHost+"]  zfs allow -u "+itUser+" ") {
-		t.Fatalf("the preflight failure lacks a %q grant line", "[localhost]  zfs allow -u "+itUser+" …")
+		t.Fatalf("the preflight failure (exit %d) lacks a %q grant line", r.code, "[localhost]  zfs allow -u "+itUser+" …")
 	}
-	ms := remoteGrantLine.FindAllStringSubmatch(r.stderr, -1)
-	if len(ms) == 0 {
-		t.Fatal("the preflight failure printed no zfs allow command")
-	}
-	for _, m := range ms {
-		// zfs allow -u USER PERMS DATASET; the dataset may hold spaces.
-		f := strings.Fields(m[1])
-		if len(f) < 6 || f[1] != "allow" || f[2] != "-u" || f[3] != itUser {
-			t.Fatalf("unexpected grant command %q", m[1])
-		}
-		ds := strings.Join(f[5:], " ")
-		if !strings.HasPrefix(ds, srcPool+"/") && !strings.HasPrefix(ds, dstPool+"/") {
-			t.Fatalf("grant command %q is not for a child of a test pool", m[1])
-		}
-		t.Logf("running printed grant: %s", m[1])
-		zfs(t, "allow", "-u", itUser, f[4], ds)
-	}
+	runPrintedGrants(t, r, remoteGrantLine)
 	return r
 }
 
@@ -987,8 +967,8 @@ func interruptRemote(t *testing.T, sig syscall.Signal, recv *regexp.Regexp, args
 	t.Logf("froze zfs send (pid %d) after %d bytes", sendPID, procWritten(sendPID))
 
 	// Wait for the receive to exist and to have read a little more than its
-	// BEGIN record. Without I/O accounting (procRead == 0) this waits the
-	// full timeout and carries on.
+	// BEGIN record. Without /proc I/O accounting (procRead == 0) this waits
+	// the full timeout and then fails the test.
 	var recvPID int
 	drainBy := time.Now().Add(30 * time.Second)
 	for time.Now().Before(drainBy) {
@@ -1006,6 +986,12 @@ func interruptRemote(t *testing.T, sig syscall.Signal, recv *regexp.Regexp, args
 	if recvPID == 0 {
 		_ = syscall.Kill(sendPID, syscall.SIGCONT)
 		abort("no zfs receive matching %s appeared", recv)
+	}
+	if procRead(recvPID) < 1<<20 {
+		// Interrupting now would not prove a thing: the receive may not have
+		// taken in the start of the stream, so no resume token is guaranteed.
+		_ = syscall.Kill(sendPID, syscall.SIGCONT)
+		abort("zfs receive (pid %d) had read only %d bytes 30 s after the send was frozen (no /proc/<pid>/io accounting?)", recvPID, procRead(recvPID))
 	}
 	t.Logf("zfs receive (pid %d) has read %d bytes", recvPID, procRead(recvPID))
 

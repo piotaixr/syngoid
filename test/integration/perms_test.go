@@ -19,25 +19,37 @@ var grantLine = regexp.MustCompile(`(?m)^\s+\[[^\]]*\]\s+(zfs allow .*\S)\s*$`)
 
 // grantFromPreflight runs syngoid as itUser with args, which must fail the
 // preflight (exit 2), then runs the printed `zfs allow` commands as root.
-// Commands for anything but a child of the test pools fail the test.
 func grantFromPreflight(t *testing.T, args ...string) {
 	t.Helper()
-	r := syngoidAs(t, itUser, args...)
+	runPrintedGrants(t, syngoidAs(t, itUser, args...), grantLine)
+}
+
+// runPrintedGrants checks that r is a preflight failure (exit 2, missing ZFS
+// permissions) and runs as root every `zfs allow -u itUser PERMS DATASET`
+// command that lines (whose first group is the command) matches in its
+// stderr. The dataset may hold spaces. A command for anything but a child of
+// the test pools fails the test, so no test ever delegates on a pool's root
+// dataset or elsewhere.
+func runPrintedGrants(t *testing.T, r result, lines *regexp.Regexp) {
+	t.Helper()
 	if r.code != 2 || !strings.Contains(r.stderr, "missing ZFS permissions") {
-		t.Fatalf("syngoid as %s without grants: exit %d, want 2 with missing ZFS permissions", itUser, r.code)
+		t.Fatalf("syngoid without grants: exit %d, want 2 with missing ZFS permissions", r.code)
 	}
-	ms := grantLine.FindAllStringSubmatch(r.stderr, -1)
+	ms := lines.FindAllStringSubmatch(r.stderr, -1)
 	if len(ms) == 0 {
 		t.Fatal("the preflight failure printed no zfs allow command")
 	}
 	for _, m := range ms {
 		f := strings.Fields(m[1])
-		inPools := len(f) == 6 && (strings.HasPrefix(f[5], srcPool+"/") || strings.HasPrefix(f[5], dstPool+"/"))
-		if !inPools || f[2] != "-u" || f[3] != itUser {
+		if len(f) < 6 || f[1] != "allow" || f[2] != "-u" || f[3] != itUser {
 			t.Fatalf("unexpected grant command %q", m[1])
 		}
+		ds := strings.Join(f[5:], " ")
+		if !strings.HasPrefix(ds, srcPool+"/") && !strings.HasPrefix(ds, dstPool+"/") {
+			t.Fatalf("grant command %q is not for a child of a test pool", m[1])
+		}
 		t.Logf("running printed grant: %s", m[1])
-		zfs(t, f[1:]...)
+		zfs(t, "allow", "-u", itUser, f[4], ds)
 	}
 }
 
