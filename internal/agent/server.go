@@ -21,6 +21,11 @@ import (
 	"github.com/piotaixr/syngoid/internal/rpc"
 )
 
+// ErrSetup marks a Serve failure that happened before the control stream
+// was accepted. The mux is not up yet, so the caller may report it on
+// stderr.
+var ErrSetup = errors.New("agent: setup failed")
+
 // Config configures Serve.
 type Config struct {
 	// NewEndpoint builds the endpoint requests run on; sudo is Hello.Sudo
@@ -36,13 +41,14 @@ type Config struct {
 }
 
 // Serve speaks the protocol on conn until the initiator asks for shutdown
-// (nil), the connection or ctx ends, or the handshake fails. Every
+// (nil), the connection or ctx ends, or the handshake fails. A failure
+// before the control stream is accepted wraps ErrSetup. Every
 // in-flight request is cancelled and has returned when Serve does.
 func Serve(ctx context.Context, conn io.ReadWriteCloser, cfg Config) error {
 	sess, err := rpc.MuxServer(conn)
 	if err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("agent: mux: %w", err)
+		return fmt.Errorf("%w: mux: %w", ErrSetup, err)
 	}
 	defer func() { _ = sess.Close() }()
 
@@ -56,7 +62,10 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, cfg Config) error {
 
 	ctrl, err := sess.AcceptStream()
 	if err != nil {
-		return sessionErr(ctx, err)
+		if err = sessionErr(ctx, err); err != nil && ctx.Err() == nil {
+			err = fmt.Errorf("%w: accept control stream: %w", ErrSetup, err)
+		}
+		return err
 	}
 	s := &server{
 		cfg: cfg, sess: sess, codec: rpc.NewCodec(ctrl),

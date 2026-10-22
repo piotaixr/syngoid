@@ -263,8 +263,11 @@ agent replies `Hello` (§7.2). Rules:
   file's hash (detects truncation/corruption).
 - On mismatch: close, push, restart, handshake again — once. A second mismatch is a critical error.
 - Handshake timeout: 30 s.
-- After a successful handshake the agent removes sibling version directories under `~/.cache/syngoid/` other than the
-  current and the most recent previous one.
+- After a successful handshake with a matching initiator the agent prunes sibling version directories, but only when
+  it runs from `$HOME/.cache/syngoid/<dir>`. Only real directories named like agent directories
+  (`^(dev|[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*)(-[0-9a-f]{8})?$`) are candidates, so other entries such as the
+  initiator cache `~/.cache/syngoid/bin` are never touched. The current directory and the candidate with the newest
+  modification time are kept; if several candidates tie for newest, nothing is removed.
 
 Before the mux is established the initiator captures the remote's stderr and prints it on any bootstrap/handshake
 failure.
@@ -358,6 +361,8 @@ must not start with `-` (argv-injection guard).
 - Each `zfs` child runs in its own process group. When the agent's stdin reaches EOF (initiator exit, `kill -9`,
   network drop → sshd closes the channel), the agent kills all child process groups and exits. This prevents orphan
   `zfs receive` processes that would mark the target busy.
+- The agent ignores SIGPIPE, so a dropped connection surfaces as a failed write, and treats SIGHUP like stdin EOF
+  (same cleanup, then exit).
 - Agent log output is sent as `Event{kind:"log"}`; the agent never writes to its own stderr after the mux is up.
 
 ## 8. Sync engine
