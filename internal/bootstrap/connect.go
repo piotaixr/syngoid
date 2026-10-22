@@ -26,6 +26,12 @@ var ErrMismatch = errors.New("agent mismatch")
 
 const defaultHandshakeTimeout = 30 * time.Second
 
+// devHashHint explains a build-hash mismatch: without a stamped hash every
+// development build differs, so an agent built for another platform never
+// matches.
+const devHashHint = `development builds match only when every platform's binary is built with the same ` +
+	`-ldflags "-X github.com/piotaixr/syngoid/internal/buildinfo.Hash=<value>", or with a release Version`
+
 // Transport runs commands on one remote host.
 type Transport interface {
 	// Label names the host in logs and errors, e.g. "user@host".
@@ -70,7 +76,7 @@ func CheckHello(got rpc.HelloReply, pushedSHA string) error {
 	case got.Version != buildinfo.Version:
 		return fmt.Errorf("%w: version %q, want %q", ErrMismatch, got.Version, buildinfo.Version)
 	case buildinfo.IsDev() && got.BuildHash != buildinfo.BuildHash():
-		return fmt.Errorf("%w: build hash %q, want %q", ErrMismatch, got.BuildHash, buildinfo.BuildHash())
+		return fmt.Errorf("%w: build hash %q, want %q (%s)", ErrMismatch, got.BuildHash, buildinfo.BuildHash(), devHashHint)
 	case pushedSHA != "" && got.ExeSHA256 != pushedSHA:
 		return fmt.Errorf("%w: executable SHA-256 %q, want the pushed %q", ErrMismatch, got.ExeSHA256, pushedSHA)
 	}
