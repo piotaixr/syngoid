@@ -30,7 +30,10 @@ var hostInfo = endpoint.HostInfo{
 }
 
 // testEP wraps a fake endpoint with the hooks the tests need. Exists on
-// "block/ds" waits for its context, on "fail/ds" fails with a CommandError
+// "block/ds" waits for its context, on "slow/ds" keeps running after its
+// context ended until release is closed (like a zfs child still being
+// reaped), on "killed/ds" fails with a CommandError once its context ended
+// (like a killed zfs child), on "fail/ds" fails with a CommandError
 // and on "log/ds" logs; everything else is the fake's.
 type testEP struct {
 	*fake.Endpoint
@@ -38,6 +41,7 @@ type testEP struct {
 
 	started   chan struct{} // receives once per blocked Exists
 	cancelled chan struct{} // receives once per blocked Exists whose ctx ended
+	release   chan struct{} // closed to let "slow/ds" return after its ctx ended
 }
 
 func (e *testEP) Exists(ctx context.Context, ds string) (bool, error) {
@@ -47,6 +51,15 @@ func (e *testEP) Exists(ctx context.Context, ds string) (bool, error) {
 		<-ctx.Done()
 		e.cancelled <- struct{}{}
 		return false, ctx.Err()
+	case "slow/ds":
+		e.started <- struct{}{}
+		<-ctx.Done()
+		<-e.release
+		return false, ctx.Err()
+	case "killed/ds":
+		e.started <- struct{}{}
+		<-ctx.Done()
+		return false, &zfs.CommandError{Argv: []string{"zfs", "list", ds}, ExitCode: -1, Stderr: "signal: killed"}
 	case "fail/ds":
 		return false, &zfs.CommandError{Argv: []string{"zfs", "list", ds}, ExitCode: 1, Stderr: "cannot open 'fail/ds': permission denied"}
 	case "log/ds":
@@ -86,6 +99,7 @@ func newHarness(t *testing.T, tweak func(*Config)) *harness {
 		Endpoint:  fake.New(h.world, hostInfo),
 		started:   make(chan struct{}, 8),
 		cancelled: make(chan struct{}, 8),
+		release:   make(chan struct{}),
 	}
 	h.cfg = Config{
 		NewEndpoint: func(_ bool, l *slog.Logger) endpoint.Endpoint { h.ep.log = l; return h.ep },
@@ -491,9 +505,13 @@ func TestServeLogEvents(t *testing.T) {
 }
 
 // blockRequest starts an Exists that blocks in the endpoint until cancelled.
-func (h *harness) blockRequest() uint64 {
+func (h *harness) blockRequest() uint64 { return h.blockOn("block/ds") }
+
+// blockOn starts an Exists on ds, one of the testEP datasets that wait for
+// their context, and returns once it is inside the endpoint.
+func (h *harness) blockOn(ds string) uint64 {
 	h.t.Helper()
-	id := h.send(rpc.MethodExists, rpc.DatasetParams{Dataset: "block/ds"})
+	id := h.send(rpc.MethodExists, rpc.DatasetParams{Dataset: ds})
 	select {
 	case <-h.ep.started:
 	case <-time.After(wait):
@@ -520,10 +538,64 @@ func TestServeCancel(t *testing.T) {
 	h.ok(rpc.MethodCancel, rpc.CancelParams{ID: blocked})
 	m := h.await(blocked)
 	if m.Error == nil || m.Error.Code != rpc.CodeCanceled {
-		t.Errorf("response = %+v, want a %q error", m, rpc.CodeCanceled)
+		t.Fatalf("response = %+v, want a %q error", m, rpc.CodeCanceled)
+	}
+	if m.Error.Message != context.Canceled.Error() {
+		t.Errorf("Message = %q, want %q (no doubled wrap)", m.Error.Message, context.Canceled.Error())
 	}
 	// Cancelling a request that is gone is not an error.
 	h.ok(rpc.MethodCancel, rpc.CancelParams{ID: blocked})
+}
+
+// A command killed by the cancellation reports its exit status, not the
+// context error; the response is still "canceled".
+func TestServeCancelKilledCommand(t *testing.T) {
+	h := newHarness(t, nil)
+	h.hello(rpc.Hello{Protocol: 1})
+	killed := h.blockOn("killed/ds")
+	h.ok(rpc.MethodCancel, rpc.CancelParams{ID: killed})
+	m := h.await(killed)
+	if m.Error == nil || m.Error.Code != rpc.CodeCanceled {
+		t.Errorf("response = %+v, want a %q error", m, rpc.CodeCanceled)
+	}
+}
+
+// An id may be reused as soon as its response has been received.
+func TestServeFinishedRequestIDIsReusable(t *testing.T) {
+	h := newHarness(t, nil)
+	h.hello(rpc.Hello{Protocol: 1})
+	for range 50 {
+		id := h.send(rpc.MethodExists, rpc.DatasetParams{Dataset: "nope"})
+		if m := h.await(id); m.Error != nil {
+			t.Fatalf("response = %+v", m)
+		}
+		// Reuse the id at once: the registry must already have forgotten it.
+		if err := h.codec.Write(rpc.Message{ID: id, Method: rpc.MethodExists, Params: json.RawMessage(`{"dataset":"nope"}`)}); err != nil {
+			t.Fatal(err)
+		}
+		if m := h.await(id); m.Error != nil {
+			t.Fatalf("reused id %d: response = %+v", id, m)
+		}
+	}
+}
+
+// Serve must not return while a handler is still running, even though its
+// context has been cancelled.
+func TestServeWaitsForHandlers(t *testing.T) {
+	h := newHarness(t, nil)
+	h.hello(rpc.Hello{Protocol: 1})
+	h.blockOn("slow/ds")
+	_ = h.cli.Close()
+	_ = h.client.Close()
+	select {
+	case err := <-h.done:
+		t.Fatalf("Serve returned (%v) while a handler was still running", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(h.ep.release)
+	if err := h.serveResult(); err != nil {
+		t.Errorf("Serve = %v, want nil", err)
+	}
 }
 
 func TestServeEOFCancelsInFlight(t *testing.T) {
@@ -597,6 +669,19 @@ func TestServeShutdown(t *testing.T) {
 }
 
 type pruneCall struct{ exe, home string }
+
+func TestServePrunePanicIsContained(t *testing.T) {
+	h := newHarness(t, func(c *Config) {
+		c.Prune = func(string, string, *slog.Logger) { panic("prune boom") }
+	})
+	h.hello(matchingHello())
+	var ok bool
+	decode(t, h.ok(rpc.MethodExists, rpc.DatasetParams{Dataset: "nope"}), &ok) // still serving
+	h.ok(rpc.MethodShutdown, nil)
+	if err := h.serveResult(); err != nil {
+		t.Errorf("Serve = %v, want nil", err)
+	}
+}
 
 func TestServePrunesOnlyOnMatch(t *testing.T) {
 	cases := []struct {

@@ -139,6 +139,13 @@ func (s *server) handshake(ctx context.Context) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer func() {
+				// Pruning is housekeeping: a panic must neither crash the
+				// agent nor reach its stderr.
+				if r := recover(); r != nil {
+					s.log.Debug(fmt.Sprintf("prune panicked: %v", r))
+				}
+			}()
 			s.cfg.Prune(s.cfg.Exe, s.cfg.Home, s.log)
 		}()
 	}
@@ -219,18 +226,18 @@ func (s *server) start(ctx context.Context, req rpc.Message) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		defer func() {
-			s.mu.Lock()
-			delete(s.inflight, req.ID)
-			s.mu.Unlock()
-			cancel()
-		}()
+		defer cancel()
 		res, err := s.run(reqCtx, h, req)
-		if err != nil && reqCtx.Err() != nil {
+		if err != nil && reqCtx.Err() != nil && !errors.Is(err, context.Canceled) {
 			// A killed command reports its exit status, not the context
 			// error; the request was cancelled all the same.
 			err = fmt.Errorf("%w: %w", context.Canceled, err)
 		}
+		// Forget the id before answering, so a client that reuses it as
+		// soon as it has the response is not rejected as a duplicate.
+		s.mu.Lock()
+		delete(s.inflight, req.ID)
+		s.mu.Unlock()
 		s.respond(req.ID, res, err)
 	}()
 }
