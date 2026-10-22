@@ -139,7 +139,10 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
   missing grants for each side. Exit 0 if everything is granted, 2 otherwise.
 - **`fetch [--platform OS/ARCH ...] [--all]`** — downloads and verifies agent binaries for this exact version into
   the local cache (§11.5). For pre-seeding before air-gapped use.
-- **`version`** — prints version, commit, build hash, protocol version.
+- **`version`** — prints `syngoid <version> (commit <commit>[, dirty], build <hash12>) protocol <n>`. The build hash
+  is the ldflags-stamped `buildinfo.Hash` when set, otherwise the hex SHA-256 of the running executable; `hash12`
+  is its first 12 characters. An unstamped dev build therefore only matches an agent that is the same file (which
+  is what self-push produces); cross-platform dev agents from `--bin-store` need a stamped hash.
 - **`serve`** — agent mode; speaks the RPC protocol (§7) on stdin/stdout. Not intended for direct use.
 
 ## 4. Architecture
@@ -328,10 +331,12 @@ Exit code 2; nothing is modified.
 ### 7.1 Transport
 
 - The agent's stdin/stdout carry a yamux session; the initiator is the yamux client.
-- **Stream 1 (control):** newline-delimited JSON messages: `Request{id, method, params}`,
-  `Response{id, result | error{code, message, stderr}}`, and agent-initiated `Event{kind: "log"|"progress", ...}`.
+- **Stream 1 (control):** newline-delimited JSON, every line one `Message{id, method, params, result, error,
+  event}` (all optional): a request has `method`, an event has `event` (`{kind: "log"|"progress", ...}`, agent
+  initiated), anything else is a response carrying `result` or `error{code, message, stderr, argv, exit_code}`
+  for the request with the same `id`. `hello` (§7.2) is the first request, with id 1.
 - **Data streams:** for `Send`/`Receive`, the initiator opens a new yamux stream whose first line is
-  `{"request_id": N}`; the remainder is the raw (codec-encoded) ZFS stream.
+  `{"request_id":N}`; the remainder is the raw (codec-encoded) ZFS stream.
 - yamux configuration: `MaxStreamWindowSize` 16 MiB initially (tunable constant), yamux keepalive disabled (SSH and
   stream EOF handle liveness).
 
@@ -344,8 +349,9 @@ agent     → Hello{protocol, version, build_hash, exe_sha256, os, arch, user, u
 
 ### 7.3 Methods
 
-One method per `Endpoint` operation (§4.3), plus `Shutdown`. Parameters are validated by the agent: dataset and
-snapshot names must match ZFS naming rules and must not start with `-` (argv-injection guard).
+One method per `Endpoint` operation (§4.3), plus `cancel` (cancels the agent-side context of a request id) and
+`shutdown`. Parameters are validated by the agent: dataset and snapshot names must match ZFS naming rules and
+must not start with `-` (argv-injection guard).
 
 ### 7.4 Agent lifecycle
 
