@@ -90,7 +90,7 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 		phase(ctx)
 	}
 
-	order, deps := Order(r.states)
+	order, deps := Order(r.states, r.e.Opts.ForceDelete)
 	failed := make([]bool, len(r.states))
 	for _, i := range order {
 		r.visited[i] = true

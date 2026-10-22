@@ -16,7 +16,7 @@ func TestOrderParentAndClone(t *testing.T) {
 		{Source: "tank/e/other"},
 		{Source: "tank/outside", Origin: "elsewhere/x@s", OriginInScope: false},
 	}
-	order, deps := Order(states)
+	order, deps := Order(states, false)
 	wantDeps := [][]int{{1}, {2}, nil, {2}, nil, nil, nil, nil}
 	if !reflect.DeepEqual(deps, wantDeps) {
 		t.Fatalf("deps = %v, want %v", deps, wantDeps)
@@ -34,7 +34,7 @@ func TestOrderCloneFollowsOriginAndParent(t *testing.T) {
 		{Source: "tank/a"},
 		{Source: "tank/b"},
 	}
-	order, deps := Order(states)
+	order, deps := Order(states, false)
 	if want := [][]int{{1, 2}, nil, nil}; !reflect.DeepEqual(deps, want) {
 		t.Fatalf("deps = %v, want %v", deps, want)
 	}
@@ -49,8 +49,33 @@ func TestOrderCycleAppendsRemaining(t *testing.T) {
 		{Source: "tank/y", Origin: "tank/x@s", OriginInScope: true},
 		{Source: "tank/z"},
 	}
-	order, _ := Order(states)
+	order, _ := Order(states, false)
 	if want := []int{2, 0, 1}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %v, want %v", order, want)
+	}
+}
+
+func TestOrderForceDeleteChildrenFollowParent(t *testing.T) {
+	states := []DatasetState{
+		{Source: "tank/a", Origin: "tank/z@s", OriginInScope: true, TargetExists: true},
+		{Source: "tank/a/c", TargetExists: true},
+		{Source: "tank/z"},
+	}
+	order, deps := Order(states, false)
+	if want := []int{1, 2, 0}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("order without force = %v, want %v", order, want)
+	}
+	if want := [][]int{{2}, nil, nil}; !reflect.DeepEqual(deps, want) {
+		t.Fatalf("deps without force = %v, want %v", deps, want)
+	}
+
+	// A parent's --force-delete destroys its target recursively, so a child
+	// must not run before it even when the parent's target exists.
+	order, deps = Order(states, true)
+	if want := []int{2, 0, 1}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("order with force = %v, want %v", order, want)
+	}
+	if want := [][]int{{2}, {0}, nil}; !reflect.DeepEqual(deps, want) {
+		t.Fatalf("deps with force = %v, want %v", deps, want)
 	}
 }

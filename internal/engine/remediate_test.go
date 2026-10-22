@@ -628,3 +628,54 @@ func TestExecutorSourceVanishedBeforeRun(t *testing.T) {
 		wantCalls(t, "target", env.dst.Calls(), nil)
 	})
 }
+
+func TestExecutorForceDeleteParentKeepsChildren(t *testing.T) {
+	// tank/r/a is a clone of tank/r/z@s, so it runs after tank/r/z and
+	// would run after its child tank/r/a/c without a parent dependency. Its
+	// target holds nothing in common with the source: the plan destroys it
+	// recursively, which must not wipe a child that already finished.
+	env := newExecEnv(t, "tank/r", "backup/r")
+	env.opts.Recursive = true
+	env.opts.ForceDelete = true
+	env.sw.Create("tank", "")
+	env.sw.Create("tank/r", "")
+	env.sw.Snap("tank/r", "r1")
+	env.sw.Create("tank/r/z", "")
+	env.sw.Snap("tank/r/z", "s")
+	env.sw.Create("tank/r/a", "")
+	env.sw.Dataset("tank/r/a").Origin = "tank/r/z@s"
+	env.sw.Snap("tank/r/a", "a1")
+	env.sw.Create("tank/r/a/c", "")
+	env.sw.Snap("tank/r/a/c", "c1")
+	env.tw.Create("backup", "")
+	mustTransfer(t, env.src, env.dst, zfs.SendSpec{Dataset: "tank/r", To: "r1"}, "backup/r")
+	env.tw.Create("backup/r/a", "")
+	env.tw.Snap("backup/r/a", "q")
+	mustTransfer(t, env.src, env.dst, zfs.SendSpec{Dataset: "tank/r/a/c", To: "c1"}, "backup/r/a/c")
+
+	ts := syncName(10)
+	states, plans := env.plan(ts)
+	idx := map[string]int{}
+	for i, s := range states {
+		idx[s.Source] = i
+	}
+	if len(states) != 4 || plans[idx["tank/r/a"]].Actions[0] != (ForceDestroyTarget{}) || plans[idx["tank/r/a/c"]].Status != StatusOK {
+		t.Fatalf("states %+v plans %+v", states, plans)
+	}
+
+	res := env.exec(context.Background(), ts, states, plans)
+	for _, r := range res {
+		if r.Status != StatusOK {
+			t.Errorf("%s: status %v (%q), want ok", r.Source, r.Status, r.Message)
+		}
+	}
+	for ds, want := range map[string][]string{
+		"backup/r/a":   {"a1", ts},
+		"backup/r/a/c": {"c1", ts},
+		"backup/r/z":   {"s", ts},
+	} {
+		if got := dsSnaps(env.tw, ds); !eqStrings(got, want) {
+			t.Errorf("%s snaps %v, want %v", ds, got, want)
+		}
+	}
+}
