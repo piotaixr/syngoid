@@ -118,7 +118,7 @@ func TestLocalReceiveBusy(t *testing.T) {
 }
 
 func TestLocalReceiveBusyLongLine(t *testing.T) {
-	// FreeBSD ps without a tty cuts lines at 79 columns unless -ww: the
+	// BSD ps without -ww may cut lines to the terminal width: the
 	// unlimited-width form comes first, so a long receive line is seen whole.
 	ds := "tank/" + strings.Repeat("long-component/", 15) + "leaf"
 	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{

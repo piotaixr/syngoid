@@ -76,10 +76,12 @@ func (l *Local) Allow(ctx context.Context, ds string) (string, error) {
 // psForms are the ps invocations processArgs tries in order; header marks a
 // form whose first output line is a header.
 //
-// `-ww` comes first: without a tty FreeBSD ps cuts lines at 79 columns, and
-// the busy regex anchors on the dataset at the end of the line. illumos ps
-// has no -w and stores only the first 80 bytes of the arguments, so there a
-// receive into a long dataset name can still go unseen (spec §14 item 4).
+// `-ww` comes first: the busy regex anchors on the dataset at the end of the
+// line, and without -w the width of BSD ps output depends on the terminal and
+// COLUMNS (FreeBSD 15.1 printed whole lines to a file even without it).
+// illumos ps has no -w and stores only the first 80 bytes of the arguments,
+// so there a receive into a long dataset name can still go unseen (spec §14
+// item 4).
 var psForms = []struct {
 	argv   []string
 	header bool

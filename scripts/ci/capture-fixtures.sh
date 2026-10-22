@@ -302,9 +302,9 @@ errcap stderr_resume_source_gone.txt zfs send -t "$token"
 # a shell script named zfs (so there is no way to rename a binary portably),
 # run by path, hence ps shows "/bin/sh <work>/b/zfs receive -s <target>" (the
 # interpreter first, plus the script's own "sleep" child). The target is a
-# valid but nonexistent 218-character dataset name, longer than FreeBSD's
-# 79-column ps line without -ww and illumos' 80-byte args: the fixtures show
-# where each ps form cuts a long receive line. Fixtures of this shape only
+# valid but nonexistent 218-character dataset name, longer than an 80-column
+# terminal line and illumos' 80-byte args: the fixtures show where each ps
+# form cuts a long receive line. Fixtures of this shape only
 # prove the ps output format, header line, width and quoting; matching a
 # receive is tested over the captured line.
 busy="$pool/busy"
