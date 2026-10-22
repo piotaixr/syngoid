@@ -31,7 +31,7 @@ func writeShim(t *testing.T, body string) string {
 
 func newTestMaster(t *testing.T, cfg Config, user, host string) *Master {
 	t.Helper()
-	m, err := NewMaster(cfg, user, host, "/d", 0)
+	m, err := NewMaster(cfg, user, host, t.TempDir(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,13 +57,13 @@ func TestMasterArgv(t *testing.T) {
 		t.Errorf("master argv =\n %q\nwant\n %q", got, wantMaster)
 	}
 	wantClient := []string{
-		"ssh", "-F", "/c", "-o", "ControlPath=/d/cm-0", "-o", "ControlMaster=no",
+		"ssh", "-F", "/c", "-o", "ControlPath=/d/cm-0", "-o", "ControlMaster=no", "-o", "BatchMode=yes",
 		"-o", "Port=2222", "-T", "--", "backup@nas", "echo hi",
 	}
 	if got := m.clientArgv("echo hi"); !slices.Equal(got, wantClient) {
 		t.Errorf("client argv =\n %q\nwant\n %q", got, wantClient)
 	}
-	wantExit := []string{"ssh", "-o", "ControlPath=/d/cm-0", "-O", "exit", "--", "backup@nas"}
+	wantExit := []string{"ssh", "-F", "/c", "-o", "ControlPath=/d/cm-0", "-O", "exit", "--", "backup@nas"}
 	if got := m.exitArgv(); !slices.Equal(got, wantExit) {
 		t.Errorf("exit argv = %q", got)
 	}
@@ -97,29 +97,53 @@ func TestRunUsesBuiltArgv(t *testing.T) {
 
 func TestBatchMode(t *testing.T) {
 	idx := func(a []string, s string) int { return slices.Index(a, s) }
+	count := func(a []string, s string) int {
+		n := 0
+		for _, x := range a {
+			if x == s {
+				n++
+			}
+		}
+		return n
+	}
 
-	m, _ := NewMaster(Config{}, "u", "h", "/d", 0)
-	for name, argv := range map[string][]string{"master": m.masterArgv(), "client": m.clientArgv("x")} {
-		b := idx(argv, "BatchMode=yes")
-		if b < 0 || argv[b-1] != "-o" || b > idx(argv, "-T") {
-			t.Errorf("%s: BatchMode=yes missing or after -T: %q", name, argv)
+	// No TTY: the master gets BatchMode=yes after the user options, before -T.
+	m, _ := NewMaster(Config{Options: []string{"Port=1"}}, "u", "h", "/d", 0)
+	argv := m.masterArgv()
+	b := idx(argv, "BatchMode=yes")
+	if b < 0 || argv[b-1] != "-o" || b < idx(argv, "Port=1") || b > idx(argv, "-T") {
+		t.Errorf("master: BatchMode=yes misplaced: %q", argv)
+	}
+
+	// Clients always get it, exactly once, ahead of the user options.
+	for _, tty := range []bool{false, true} {
+		for _, opts := range [][]string{nil, {"batchmode=no", "Port=1"}, {"BatchMode no"}} {
+			m, _ := NewMaster(Config{StdinIsTTY: tty, Options: opts}, "u", "h", "/d", 0)
+			argv := m.clientArgv("x")
+			if count(argv, "BatchMode=yes") != 1 {
+				t.Errorf("tty=%v opts=%q: client BatchMode=yes count != 1: %q", tty, opts, argv)
+			}
+			if len(opts) > 0 && idx(argv, "BatchMode=yes") > idx(argv, opts[0]) {
+				t.Errorf("tty=%v opts=%q: ours must precede the user's: %q", tty, opts, argv)
+			}
 		}
 	}
 
+	// A user BatchMode option keeps the master from adding its own.
 	for _, opt := range []string{"batchmode=no", "BatchMode no", "BATCHMODE=yes"} {
 		m, _ := NewMaster(Config{Options: []string{opt}}, "u", "h", "/d", 0)
-		if slices.Contains(m.clientArgv("x"), "BatchMode=yes") {
-			t.Errorf("option %q: BatchMode=yes still added: %q", opt, m.clientArgv("x"))
+		if slices.Contains(m.masterArgv(), "BatchMode=yes") {
+			t.Errorf("option %q: master BatchMode=yes still added: %q", opt, m.masterArgv())
 		}
 	}
 
 	mt, _ := NewMaster(Config{StdinIsTTY: true}, "u", "h", "/d", 0)
-	if slices.Contains(mt.clientArgv("x"), "BatchMode=yes") {
-		t.Errorf("TTY: BatchMode=yes added")
+	if slices.Contains(mt.masterArgv(), "BatchMode=yes") {
+		t.Errorf("TTY: master BatchMode=yes added")
 	}
 	// A different option that merely contains the word is not an override.
 	mo, _ := NewMaster(Config{Options: []string{"SendEnv=batchmode"}}, "u", "h", "/d", 0)
-	if !slices.Contains(mo.clientArgv("x"), "BatchMode=yes") {
+	if !slices.Contains(mo.masterArgv(), "BatchMode=yes") {
 		t.Errorf("unrelated option suppressed BatchMode")
 	}
 }
@@ -212,9 +236,17 @@ func TestClientCommandsOwnProcessGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = p.Close() }()
-	time.Sleep(200 * time.Millisecond)
-	b, _ = os.ReadFile(pgidFile)
-	if got := strings.TrimSpace(string(b)); got == strconv.Itoa(syscall.Getpgrp()) || got == "" {
+	// The master step left the test's own pgid in the file; wait for the
+	// spawned shim to overwrite it.
+	var got string
+	for i := 0; i < 300; i++ {
+		b, _ = os.ReadFile(pgidFile)
+		if got = strings.TrimSpace(string(b)); got != "" && got != strconv.Itoa(syscall.Getpgrp()) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got == "" || got == strconv.Itoa(syscall.Getpgrp()) {
 		t.Errorf("spawned pgid = %q, want own group", got)
 	}
 }
@@ -261,11 +293,15 @@ func TestRunCancelKillsGroup(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { _, err := m.Run(ctx, "x", nil); done <- err }()
 	waitFile(t, pidFile)
+	cancelled := time.Now()
 	cancel()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("err = %v, want context.Canceled", err)
+		}
+		if d := time.Since(cancelled); d > 2*time.Second {
+			t.Errorf("Run returned %v after cancel", d)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
@@ -477,5 +513,67 @@ func TestSSHEnvNotOverridden(t *testing.T) {
 	out, err := m.Run(context.Background(), "x", nil)
 	if err != nil || string(out) != "sentinel" {
 		t.Errorf("LC_ALL = %q err %v", out, err)
+	}
+}
+
+func TestStartReturnsDespiteInheritedStderr(t *testing.T) {
+	// Like a ProxyCommand child: outlives the foreground ssh holding its stderr.
+	shim := writeShim(t, `(sleep 5 >&2 &); exit 0`)
+	m := newTestMaster(t, Config{SSH: shim}, "", "h")
+	start := time.Now()
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Start took %v", d)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(m.ctlp), "*.err-*")); len(left) != 0 {
+		t.Errorf("stderr file left behind: %v", left)
+	}
+}
+
+func TestStartErrorCarriesStderr(t *testing.T) {
+	shim := writeShim(t, `echo 'ssh: connect to host h port 22: Connection refused' >&2; (sleep 5 >&2 &); exit 255`)
+	m := newTestMaster(t, Config{SSH: shim}, "", "h")
+	start := time.Now()
+	var se *Error
+	err := m.Start(context.Background())
+	if !errors.As(err, &se) || se.ExitCode != 255 || !strings.Contains(se.Stderr, "Connection refused") {
+		t.Fatalf("Start err = %v", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Start took %v", d)
+	}
+}
+
+func TestStartControlDirMissing(t *testing.T) {
+	m := newTestMaster(t, Config{SSH: writeShim(t, `true`)}, "", "h")
+	m.ctlp = "/nonexistent-dir/cm-0"
+	var se *Error
+	if err := m.Start(context.Background()); !errors.As(err, &se) {
+		t.Errorf("Start = %v, want *Error", err)
+	}
+}
+
+func TestRunSucceedsWhenPipeHeldAfterExit(t *testing.T) {
+	// ssh exits 0 but a background process keeps stdout open: success, bounded wait.
+	m := newTestMaster(t, Config{SSH: writeShim(t, `echo ok; (sleep 5 &) ; exit 0`)}, "", "h")
+	m.killGrace = 300 * time.Millisecond
+	start := time.Now()
+	out, err := m.Run(context.Background(), "x", nil)
+	if err != nil || !strings.HasPrefix(string(out), "ok") {
+		t.Errorf("out %q err %v", out, err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("Run took %v", d)
+	}
+}
+
+func TestErrorMessage(t *testing.T) {
+	if got := (&Error{Label: "h", ExitCode: 1}).Error(); got != "ssh h: exit 1" {
+		t.Errorf("empty stderr message %q", got)
+	}
+	if got := (&Error{Label: "h", ExitCode: 1, Stderr: "w\nfatal\n"}).Error(); got != "ssh h: exit 1: fatal" {
+		t.Errorf("message %q", got)
 	}
 }
