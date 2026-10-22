@@ -176,8 +176,10 @@ func TestParseCapturedSnapshots(t *testing.T) {
 			checkCapturedSnapshots(t, osName, all)
 
 			// The typed listing was captured with the property list before
-			// -r / -d 1; illumos zfs stops parsing options at the first
-			// operand and rejects that order (see TestClassifyCaptured).
+			// -r / -d 1 (commands.txt); illumos zfs stops parsing options at
+			// the first operand and rejected that order (see
+			// TestClassifyCaptured). getArgs now puts every option first
+			// (TestQueryArgvOptionsBeforeOperands).
 			wantTyped := osName != "illumos"
 			for _, name := range []string{"snaps.txt", "snaps_d1.txt"} {
 				if ok := captureStatus(t, osName, name) == 0; ok != wantTyped {
