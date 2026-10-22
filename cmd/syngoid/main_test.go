@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -72,7 +73,7 @@ func TestPoolExists(t *testing.T) {
 
 func TestPoolExistsWarnsOnceWhenZFSFails(t *testing.T) {
 	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
-		"zfs list -H -o name -d 0": {Stderr: "zfs: command not found\n", Exit: 127},
+		"zfs list -H -o name -d 0": {Stderr: "The ZFS modules are not loaded.\n", Exit: 1},
 	}}
 	var stderr bytes.Buffer
 	p := &pools{exec: fe, stderr: &stderr}
@@ -81,6 +82,26 @@ func TestPoolExistsWarnsOnceWhenZFSFails(t *testing.T) {
 	}
 	if got, want := stderr.String(), "WARNING: Unable to enumerate pools (is zfs available?)\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
+	}
+}
+
+// notFoundExec fails every command the way zfs.OSExec does for a binary
+// missing from PATH.
+type notFoundExec struct{}
+
+func (notFoundExec) Run(_ context.Context, c zfs.Cmd) error {
+	return fmt.Errorf("%s: %w: %q in PATH", strings.Join(c.Argv, " "), exec.ErrNotFound, c.Argv[0])
+}
+
+func TestPoolExistsSilentWithoutZFS(t *testing.T) {
+	// A laptop without ZFS relaying between two hosts: no pools, no warning.
+	var stderr bytes.Buffer
+	p := &pools{exec: notFoundExec{}, stderr: &stderr}
+	if p.exists("db1") || p.exists("nas") {
+		t.Error("exists must be false without zfs")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
 	}
 }
 

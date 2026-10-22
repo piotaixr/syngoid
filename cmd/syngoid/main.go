@@ -4,9 +4,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -102,14 +104,18 @@ type pools struct {
 	warn   sync.Once
 }
 
-// exists reports whether a local ZFS pool called name exists. Any error,
-// such as zfs not being installed, counts as no and warns once.
+// exists reports whether a local ZFS pool called name exists. Any error
+// counts as no; one other than zfs not being installed warns once (a host
+// without ZFS, e.g. a laptop relaying between two remotes, has no pools).
 func (p *pools) exists(name string) bool {
 	var out bytes.Buffer
 	err := p.exec.Run(context.Background(), zfs.Cmd{
 		Argv:   []string{"zfs", "list", "-H", "-o", "name", "-d", "0"},
 		Stdout: &out,
 	})
+	if errors.Is(err, exec.ErrNotFound) {
+		return false
+	}
 	if err != nil {
 		p.warn.Do(func() {
 			_, _ = io.WriteString(p.stderr, "WARNING: Unable to enumerate pools (is zfs available?)\n")
