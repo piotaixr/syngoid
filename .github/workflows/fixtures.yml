@@ -1,14 +1,21 @@
 name: fixtures
 
 # Captures real zfs, zfs allow and ps output on Linux, FreeBSD and illumos
-# (OmniOS) for the parser tests (spec 14.3, 14.4). Run it by hand, download the
-# fixtures-<os> artifacts and copy them into the testdata directories.
+# (OmniOS) for the parser tests (spec 14.3, 14.4). Run it by hand, or let it
+# run on a pull request that changes the capture script or this workflow
+# (GitHub dispatches a workflow by hand only once it is on the default
+# branch). Download the fixtures-<os> artifacts and copy them into the
+# testdata directories.
 #
 # The VM jobs always finish their run block successfully after writing the
 # script's status to fixtures-out/exit_code.txt, so the VM action copies the
 # output back even when the capture failed; a later step then fails the job.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/ci/capture-fixtures.sh
+      - .github/workflows/fixtures.yml
 
 permissions:
   contents: read
