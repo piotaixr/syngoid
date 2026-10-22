@@ -45,9 +45,11 @@ type testEP struct {
 	*fake.Endpoint
 	log *slog.Logger
 
-	started   chan struct{} // receives once per blocked Exists
+	started   chan struct{} // receives once per blocked Exists or started Send
 	cancelled chan struct{} // receives once per "block/ds" whose ctx ended
 	release   chan struct{} // closed to let "deaf/ds" return
+	sendCtx   chan error    // receives ctx.Err() as each Send returns
+	recvCtx   chan error    // receives ctx.Err() as each Receive returns
 }
 
 func newTestEP(w *fake.World) *testEP {
@@ -56,6 +58,8 @@ func newTestEP(w *fake.World) *testEP {
 		started:   make(chan struct{}, 8),
 		cancelled: make(chan struct{}, 8),
 		release:   make(chan struct{}),
+		sendCtx:   make(chan error, 8),
+		recvCtx:   make(chan error, 8),
 	}
 }
 

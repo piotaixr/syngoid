@@ -246,6 +246,37 @@ func TestDataHeader(t *testing.T) {
 	}
 }
 
+func TestDataHeaderLeavesPayloadInReader(t *testing.T) {
+	// Header and more than a buffer's worth of payload arrive in one write:
+	// the reader must hold on to what it read past the header.
+	payload := bytes.Repeat([]byte("0123456789abcdef"), 600)
+	var b bytes.Buffer
+	if err := WriteDataHeader(&b, 9); err != nil {
+		t.Fatal(err)
+	}
+	b.Write(payload)
+
+	a, c := net.Pipe()
+	go func() {
+		defer func() { _ = a.Close() }()
+		_, _ = a.Write(b.Bytes())
+	}()
+	r := bufio.NewReader(c)
+	if id, err := ReadDataHeader(r); err != nil || id != 9 {
+		t.Fatalf("ReadDataHeader = %d, %v, want 9", id, err)
+	}
+	if r.Buffered() == 0 {
+		t.Fatal("no payload bytes buffered after the header")
+	}
+	rest, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(rest, payload) {
+		t.Fatalf("got %d bytes after the header, want exactly the %d payload bytes", len(rest), len(payload))
+	}
+}
+
 func TestMuxConfigSilent(t *testing.T) {
 	cfg := muxConfig()
 	if cfg.LogOutput != io.Discard {

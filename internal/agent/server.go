@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/yamux"
 
@@ -57,7 +58,11 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, cfg Config) error {
 	if err != nil {
 		return sessionErr(ctx, err)
 	}
-	s := &server{cfg: cfg, sess: sess, codec: rpc.NewCodec(ctrl), inflight: map[uint64]context.CancelFunc{}}
+	s := &server{
+		cfg: cfg, sess: sess, codec: rpc.NewCodec(ctrl),
+		inflight:    map[uint64]context.CancelFunc{},
+		dataTimeout: dataStreamTimeout,
+	}
 	// Deferred after cancel, so it runs first: stop everything, then wait.
 	defer s.wg.Wait()
 	defer cancel()
@@ -65,6 +70,13 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, cfg Config) error {
 	if err := s.handshake(ctx); err != nil {
 		return err
 	}
+	// Every later stream is a data stream; the accept loop ends with the
+	// session.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.acceptStreams(ctx)
+	}()
 	return s.loop(ctx)
 }
 
@@ -90,6 +102,9 @@ type server struct {
 	wg       sync.WaitGroup
 	mu       sync.Mutex
 	inflight map[uint64]context.CancelFunc
+	streams  rendezvous
+	// dataTimeout is dataStreamTimeout as Serve started.
+	dataTimeout time.Duration
 }
 
 // handshake reads the hello request and answers it.
