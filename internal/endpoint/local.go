@@ -87,8 +87,8 @@ func (l *Local) processArgs(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	out.Reset()
-	if err := l.exec.Run(ctx, zfs.Cmd{Argv: []string{"ps", "-eo", "args"}, Stdout: &out}); err != nil {
-		return nil, err
+	if err2 := l.exec.Run(ctx, zfs.Cmd{Argv: []string{"ps", "-eo", "args"}, Stdout: &out}); err2 != nil {
+		return nil, errors.Join(err, err2)
 	}
 	_, rest, _ := strings.Cut(out.String(), "\n")
 	return strings.Split(rest, "\n"), nil

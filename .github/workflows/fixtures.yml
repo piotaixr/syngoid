@@ -3,6 +3,10 @@ name: fixtures
 # Captures real zfs, zfs allow and ps output on Linux, FreeBSD and illumos
 # (OmniOS) for the parser tests (spec 14.3, 14.4). Run it by hand, download the
 # fixtures-<os> artifacts and copy them into the testdata directories.
+#
+# The VM jobs always finish their run block successfully after writing the
+# script's status to fixtures-out/exit_code.txt, so the VM action copies the
+# output back even when the capture failed; a later step then fails the job.
 on:
   workflow_dispatch:
 
@@ -12,8 +16,11 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: install ZFS
         run: |
           export DEBIAN_FRONTEND=noninteractive
@@ -28,7 +35,8 @@ jobs:
         run: sudo sh scripts/ci/capture-fixtures.sh "$PWD/fixtures-out"
       - name: hand the files back to the runner user
         if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" fixtures-out
+        run: |
+          if [ -d fixtures-out ]; then sudo chown -R "$(id -u):$(id -g)" fixtures-out; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -38,8 +46,11 @@ jobs:
 
   freebsd:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: capture in a FreeBSD VM
         uses: vmactions/freebsd-vm@v1
         with:
@@ -47,27 +58,40 @@ jobs:
           prepare: |
             kldstat -q -m zfs || kldload zfs
           run: |
-            sh scripts/ci/capture-fixtures.sh "$PWD/fixtures-out"
+            rc=0
+            sh scripts/ci/capture-fixtures.sh "$PWD/fixtures-out" || rc=$?
+            mkdir -p fixtures-out
+            echo "$rc" >fixtures-out/exit_code.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: fixtures-freebsd
           path: fixtures-out
           if-no-files-found: warn
+      - name: fail when the capture failed
+        run: test "$(cat fixtures-out/exit_code.txt)" = 0
 
   omnios:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: capture in an OmniOS VM
         uses: vmactions/omnios-vm@v1
         with:
           usesh: true
           run: |
-            sh scripts/ci/capture-fixtures.sh "$PWD/fixtures-out"
+            rc=0
+            sh scripts/ci/capture-fixtures.sh "$PWD/fixtures-out" || rc=$?
+            mkdir -p fixtures-out
+            echo "$rc" >fixtures-out/exit_code.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: fixtures-omnios
           path: fixtures-out
           if-no-files-found: warn
+      - name: fail when the capture failed
+        run: test "$(cat fixtures-out/exit_code.txt)" = 0
