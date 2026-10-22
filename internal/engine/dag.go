@@ -5,11 +5,13 @@ import "strings"
 // Order returns a replication order for states and the dependencies that
 // produced it: deps[i] lists the indices state i must wait for. A state
 // waits for its parent when the parent is in states and has no target yet,
-// and for its origin dataset when the origin is in scope. order is a
+// or always when forceDelete is set (a parent's ForceDestroyTarget destroys
+// its target recursively, children included), and for its origin dataset
+// when the origin is in scope. order is a
 // topological order that always takes the lowest-index ready state, so
 // independent datasets keep their listing order. On a dependency cycle
 // (which should not happen) the remaining states follow in index order.
-func Order(states []DatasetState) (order []int, deps [][]int) {
+func Order(states []DatasetState, forceDelete bool) (order []int, deps [][]int) {
 	index := make(map[string]int, len(states))
 	for i, s := range states {
 		index[s.Source] = i
@@ -17,7 +19,7 @@ func Order(states []DatasetState) (order []int, deps [][]int) {
 	deps = make([][]int, len(states))
 	for i, s := range states {
 		if p, ok := parentName(s.Source); ok {
-			if j, found := index[p]; found && !states[j].TargetExists {
+			if j, found := index[p]; found && (forceDelete || !states[j].TargetExists) {
 				deps[i] = append(deps[i], j)
 			}
 		}

@@ -246,7 +246,6 @@ func TestPlan(t *testing.T) {
 			want: []Action{
 				SendFromBookmark{Bookmark: "bm", To: "b"},
 				Hold{Side: Source, Snap: "b"},
-				Release{Side: Source, Snap: "x"},
 				Hold{Side: Target, Snap: "b"},
 				Release{Side: Target, Snap: "x"},
 				CreateBookmark{Snap: "b"},
@@ -336,7 +335,7 @@ func TestPlan(t *testing.T) {
 			},
 		},
 		{
-			name: "holds bookmark path release target snapshot",
+			name: "holds bookmark path releases only the target snapshot",
 			state: func(s *DatasetState) {
 				s.TargetExists = true
 				s.TargetSnaps = []zfs.Snapshot{{Name: "x", GUID: "gx", CreateTxg: 5}}
@@ -349,7 +348,22 @@ func TestPlan(t *testing.T) {
 			want: []Action{
 				SendFromBookmark{Bookmark: "bm", To: planSync},
 				Hold{Side: Source, Snap: planSync},
-				Release{Side: Source, Snap: "x"},
+				Hold{Side: Target, Snap: planSync},
+				Release{Side: Target, Snap: "x"},
+			},
+		},
+		{
+			name: "holds bookmark fallback",
+			state: func(s *DatasetState) {
+				s.TargetExists = true
+				s.TargetSnaps = []zfs.Snapshot{{Name: "x", GUID: "gx", CreateTxg: 5}}
+				s.SourceBookmarks = []zfs.Bookmark{bmX}
+			},
+			opts: func(o *PlanOptions) { o.UseHold = true },
+			want: []Action{
+				SendFromBookmark{Bookmark: "bm", To: "b"},
+				SendIncremental{From: "b", To: planSync, Intermediates: true},
+				Hold{Side: Source, Snap: planSync},
 				Hold{Side: Target, Snap: planSync},
 				Release{Side: Target, Snap: "x"},
 			},

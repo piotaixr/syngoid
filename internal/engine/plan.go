@@ -198,13 +198,15 @@ func noMatchMessage(s DatasetState) string {
 
 // postActions returns the actions that follow the sends: holds, bookmark
 // creation, sync snapshot pruning and target snapshot deletion. match is
-// the previous common snapshot, empty for a first sync.
+// the previous common snapshot, empty for a first sync. On the bookmark
+// fallback path match exists on the source only as a bookmark, which holds
+// cannot be released from, so only the target side releases it.
 func postActions(s DatasetState, o PlanOptions, match, newest string) []Action {
 	var out []Action
 	if o.UseHold {
 		for _, side := range []Side{Source, Target} {
 			out = append(out, Hold{Side: side, Snap: newest})
-			if match != "" {
+			if match != "" && (side == Target || hasSnapshot(s.SourceSnaps, match)) {
 				out = append(out, Release{Side: side, Snap: match})
 			}
 		}
@@ -233,4 +235,14 @@ func postActions(s DatasetState, o PlanOptions, match, newest string) []Action {
 		out = append(out, DestroyTargetSnaps{})
 	}
 	return out
+}
+
+// hasSnapshot reports whether snaps contains a snapshot named name.
+func hasSnapshot(snaps []zfs.Snapshot, name string) bool {
+	for _, sn := range snaps {
+		if sn.Name == name {
+			return true
+		}
+	}
+	return false
 }
