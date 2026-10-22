@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -91,6 +92,18 @@ type serveProc struct {
 	stderr  *lockedBuffer
 	exited  chan error
 	pidfile string
+	cmd     *exec.Cmd
+	// dropped is set before dropStdout so the initiator's session does not
+	// see the agent's stdout end.
+	dropped atomic.Bool
+	outR    *os.File
+}
+
+// dropStdout closes the read end of the agent's stdout, as a vanished peer
+// does, while the initiator's session and the agent's stdin stay up.
+func (p *serveProc) dropStdout() {
+	p.dropped.Store(true)
+	_ = p.outR.Close()
 }
 
 // lockedBuffer is a bytes.Buffer that may be read while the child writes.
@@ -148,19 +161,33 @@ func startServe(t *testing.T, shim string, debug bool) *serveProc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := cmd.StdoutPipe()
+	// The agent's stdout is a pipe of our own, relayed to the initiator's
+	// session, so that closing its read end (dropStdout) is visible to the
+	// agent only.
+	outR, outW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.outR = outR
+	cmd.Stdout = outW
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	_ = outW.Close()
+	p.cmd = cmd
 	go func() { p.exited <- cmd.Wait() }()
+	out, relay := io.Pipe()
+	go func() {
+		_, err := io.Copy(relay, outR)
+		if !p.dropped.Load() {
+			relay.CloseWithError(err)
+		}
+	}()
 
 	hello := rpc.Hello{Protocol: buildinfo.ProtocolVersion, Version: buildinfo.Version, BuildHash: buildinfo.BuildHash(), Debug: debug}
 	hctx, hcancel := context.WithTimeout(ctx, 15*time.Second)
 	defer hcancel()
-	conn := duplex{Reader: out, Writer: in, closers: []io.Closer{in, out}}
+	conn := duplex{Reader: out, Writer: in, closers: []io.Closer{in, outR, out}}
 	p.conn = conn
 	p.remote, _, err = rpc.Handshake(hctx, conn, hello, "agent", nil)
 	if err != nil {
@@ -187,53 +214,70 @@ func (p *serveProc) waitExit(t *testing.T, d time.Duration) error {
 	}
 }
 
-func TestServeDisconnectKillsChildren(t *testing.T) {
-	p := startServe(t, `case $1 in
+// waitPID waits for the shim to record its pid. It fails the test if sent
+// delivers a result first, which means the send ended before the shim ran.
+func (p *serveProc) waitPID(t *testing.T, sent <-chan error) int {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if b, err := os.ReadFile(p.pidfile); err == nil {
+			if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid != 0 {
+				t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+				return pid
+			}
+		}
+		select {
+		case err := <-sent:
+			t.Fatalf("Send returned early: %v (stderr %q)", err, p.stderr)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("shim never started (stderr %q)", p.stderr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// waitDead fails the test unless process pid is gone within 15 s.
+func waitDead(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("zfs child %d survived", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+const blockingSendShim = `case $1 in
 send) echo $$ > "$SHIM_PIDFILE"; exec sleep 300;;
 version) echo zfs-2.3.4-1;;
 *) exit 0;;
 esac
-`, false)
+`
 
+func startBlockingSend(p *serveProc) <-chan error {
 	sent := make(chan error, 1)
 	go func() {
 		sent <- p.remote.Send(context.Background(), zfs.SendSpec{Dataset: "tank/a", To: "s1"}, endpoint.SendOpts{Codec: stream.None}, io.Discard)
 	}()
+	return sent
+}
 
-	var pid int
-	deadline := time.Now().Add(15 * time.Second)
-	for pid == 0 {
-		if b, err := os.ReadFile(p.pidfile); err == nil {
-			pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
-		}
-		if pid == 0 {
-			select {
-			case err := <-sent:
-				t.Fatalf("Send returned early: %v (stderr %q)", err, p.stderr)
-			default:
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("shim never started (stderr %q)", p.stderr)
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-	}
-	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+func TestServeDisconnectKillsChildren(t *testing.T) {
+	p := startServe(t, blockingSendShim, false)
+	sent := startBlockingSend(p)
+	pid := p.waitPID(t, sent)
 
 	// The initiator vanishes: the agent's stdin hits EOF and its stdout is
 	// a broken pipe.
 	_ = p.conn.Close()
 
-	deadline = time.Now().Add(15 * time.Second)
-	for {
-		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("zfs child %d survived the disconnect", pid)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	waitDead(t, pid)
 	if err := p.waitExit(t, 15*time.Second); err != nil {
 		t.Errorf("serve exited with %v (stderr %q)", err, p.stderr)
 	}
@@ -244,6 +288,29 @@ esac
 		}
 	case <-time.After(15 * time.Second):
 		t.Error("Send did not return")
+	}
+}
+
+// TestServeSurvivesBrokenStdout guards the SIGPIPE handling: the agent's
+// stdout is fd 1, so Go would kill the process with SIGPIPE on the first
+// write after the peer's read end closes, unless the signal is ignored. The
+// agent must instead fail the write and clean up its children.
+func TestServeSurvivesBrokenStdout(t *testing.T) {
+	p := startServe(t, blockingSendShim, false)
+	sent := startBlockingSend(p)
+	pid := p.waitPID(t, sent)
+
+	// Stdin stays open. A request makes the agent write its answer into
+	// the broken pipe.
+	p.dropStdout()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go func() { _, _ = p.remote.ListTree(ctx, "tank/a", false) }()
+
+	waitDead(t, pid)
+	_ = p.waitExit(t, 15*time.Second)
+	if ws, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		t.Errorf("serve was killed by %v, want it to survive SIGPIPE (stderr %q)", ws.Signal(), p.stderr)
 	}
 }
 

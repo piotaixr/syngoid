@@ -86,8 +86,8 @@ func TestPruneSiblingsOutsideDefaultBase(t *testing.T) {
 	checkPresent(t, home, "1.0.0", "1.1.0", "1.2.0")
 }
 
-func TestPruneSiblingsTieRemovesNothing(t *testing.T) {
-	home := cache(t, "1.0.0", "1.1.0", "1.2.0")
+func TestPruneSiblingsKeepsTiedNewestRemovesOlder(t *testing.T) {
+	home := cache(t, "0.9.0", "1.0.0", "1.1.0", "1.2.0")
 	base := filepath.Join(home, ".cache", "syngoid")
 	same := time.Unix(1_800_000_000, 0)
 	for _, n := range []string{"1.0.0", "1.1.0"} {
@@ -97,6 +97,30 @@ func TestPruneSiblingsTieRemovesNothing(t *testing.T) {
 	}
 	PruneSiblings(filepath.Join(base, "1.2.0", "syngoid"), home, discard)
 	checkPresent(t, home, "1.0.0", "1.1.0", "1.2.0")
+}
+
+func TestPruneSiblingsHomeThroughSymlink(t *testing.T) {
+	real := cache(t, "1.0.0", "1.1.0", "1.2.0")
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	// exe resolved (as os.Executable reports it), HOME through the link.
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	PruneSiblings(filepath.Join(resolved, ".cache", "syngoid", "1.2.0", "syngoid"), link, discard)
+	checkPresent(t, real, "1.1.0", "1.2.0")
+
+	// And the reverse: exe under the link, HOME resolved.
+	real2 := cache(t, "1.0.0", "1.1.0", "1.2.0")
+	link2 := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(real2, link2); err != nil {
+		t.Fatal(err)
+	}
+	PruneSiblings(filepath.Join(link2, ".cache", "syngoid", "1.2.0", "syngoid"), real2, discard)
+	checkPresent(t, real2, "1.1.0", "1.2.0")
 }
 
 func TestPruneSiblingsLeavesFilesAndSymlinks(t *testing.T) {

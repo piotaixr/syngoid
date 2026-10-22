@@ -267,7 +267,8 @@ agent replies `Hello` (§7.2). Rules:
   it runs from `$HOME/.cache/syngoid/<dir>`. Only real directories named like agent directories
   (`^(dev|[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*)(-[0-9a-f]{8})?$`) are candidates, so other entries such as the
   initiator cache `~/.cache/syngoid/bin` are never touched. The current directory and the candidate with the newest
-  modification time are kept; if several candidates tie for newest, nothing is removed.
+  modification time are kept (all of them if several tie for newest); strictly older candidates are removed. Paths
+  are compared with symlinks resolved.
 
 Before the mux is established the initiator captures the remote's stderr and prints it on any bootstrap/handshake
 failure.

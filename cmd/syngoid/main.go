@@ -45,7 +45,7 @@ func main() {
 	os.Exit(code)
 }
 
-// forceExitOnSecondSignal waits for the first SIGINT or SIGTERM (which
+// forceExitOnSecondSignal waits for the first SIGINT, SIGTERM or SIGHUP (which
 // cancels ctx and starts the graceful shutdown), then exits with code 2 on
 // the next SIGINT.
 func forceExitOnSecondSignal(ctx context.Context) {

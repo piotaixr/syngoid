@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/piotaixr/syngoid/internal/agent"
@@ -22,10 +23,8 @@ func runServe(ctx context.Context, env Env) int {
 	// agent before it has cleaned up its children.
 	signal.Ignore(syscall.SIGPIPE)
 
-	exe, err := os.Executable()
-	if err != nil {
-		exe = ""
-	}
+	// On error exe stays empty and pruning does nothing.
+	exe, _ := os.Executable()
 	// Without a hash the initiator's check fails and it pushes again.
 	sum, err := buildinfo.ExeSHA256()
 	if err != nil {
@@ -43,7 +42,7 @@ func runServe(ctx context.Context, env Env) int {
 		ExeSHA256: sum,
 		Prune:     agent.PruneSiblings,
 	}
-	err = agent.Serve(ctx, stdioConn{in: env.Stdin, out: env.Stdout}, cfg)
+	err = agent.Serve(ctx, newStdioConn(env.Stdin, env.Stdout), cfg)
 	if err == nil {
 		return 0
 	}
@@ -55,17 +54,81 @@ func runServe(ctx context.Context, env Env) int {
 
 // stdioConn is the agent's connection: it reads the initiator's bytes from
 // in and writes its own to out.
+//
+// Close must unblock a pending Read, which closing a blocking file such as
+// os.Stdin does not do, and the mux waits for its reader before it shuts
+// down. So Read is served from a pump goroutine that does the real reads; a
+// closed conn abandons the pump, which ends with its read or the process.
 type stdioConn struct {
 	in  io.Reader
 	out io.Writer
+
+	startPump sync.Once
+	chunks    chan chunk
+	done      chan struct{}
+	closeOnce sync.Once
+	buf       []byte // rest of the last chunk
+	err       error  // the pump's final error, once delivered
 }
 
-func (c stdioConn) Read(p []byte) (int, error)  { return c.in.Read(p) }
-func (c stdioConn) Write(p []byte) (int, error) { return c.out.Write(p) }
+type chunk struct {
+	data []byte
+	err  error
+}
 
-// Close closes whichever of in and out can be closed, which unblocks a
-// pending Read on a pipe.
-func (c stdioConn) Close() error {
+func newStdioConn(in io.Reader, out io.Writer) *stdioConn {
+	return &stdioConn{in: in, out: out, chunks: make(chan chunk), done: make(chan struct{})}
+}
+
+func (c *stdioConn) pump() {
+	for {
+		buf := make([]byte, 32*1024)
+		n, err := c.in.Read(buf)
+		if n > 0 && !c.deliver(chunk{data: buf[:n]}) {
+			return
+		}
+		if err != nil {
+			c.deliver(chunk{err: err})
+			return
+		}
+	}
+}
+
+// deliver hands ch to Read; it reports false when the conn was closed first.
+func (c *stdioConn) deliver(ch chunk) bool {
+	select {
+	case c.chunks <- ch:
+		return true
+	case <-c.done:
+		return false
+	}
+}
+
+// Read must not be called concurrently.
+func (c *stdioConn) Read(p []byte) (int, error) {
+	c.startPump.Do(func() { go c.pump() })
+	for len(c.buf) == 0 {
+		if c.err != nil {
+			return 0, c.err
+		}
+		select {
+		case ch := <-c.chunks:
+			c.buf, c.err = ch.data, ch.err
+		case <-c.done:
+			return 0, io.ErrClosedPipe
+		}
+	}
+	n := copy(p, c.buf)
+	c.buf = c.buf[n:]
+	return n, nil
+}
+
+func (c *stdioConn) Write(p []byte) (int, error) { return c.out.Write(p) }
+
+// Close closes whichever of in and out can be closed and makes pending and
+// later Reads fail.
+func (c *stdioConn) Close() error {
+	c.closeOnce.Do(func() { close(c.done) })
 	var errs []error
 	for _, v := range []any{c.in, c.out} {
 		if cl, ok := v.(io.Closer); ok {
