@@ -42,7 +42,7 @@ func Validate(method string, params any) error {
 			return err
 		}
 		for _, name := range p.Props {
-			if !propNameRE.MatchString(name) {
+			if !validGetPropName(name) {
 				return &InvalidError{Field: "props", Value: name}
 			}
 		}
@@ -251,6 +251,21 @@ func recvArgsError(args []string, i int, flag string) error {
 		return &InvalidError{Field: "spec.args", Value: args[i]}
 	}
 	return &InvalidError{Field: "spec.args", Value: flag}
+}
+
+// validGetPropName reports whether name is a property name get_props may
+// query: a plain property name, or written@<snap> / written#<bookmark>
+// (used for size estimates) with a valid short name.
+func validGetPropName(name string) bool {
+	if propNameRE.MatchString(name) {
+		return true
+	}
+	for _, prefix := range []string{"written@", "written#"} {
+		if short, ok := strings.CutPrefix(name, prefix); ok {
+			return validShort(short)
+		}
+	}
+	return false
 }
 
 // validPropAssignment reports whether s is "prop=value" with a valid
