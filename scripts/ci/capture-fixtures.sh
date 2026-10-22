@@ -19,8 +19,11 @@
 #                          zfs send -nvP, -i, -I and -t
 #   stderr_*.txt           stderr of the failing receives and sends (partial state,
 #                          destination exists, no dataset, resume source gone)
-#   ps_A.txt, ps_e.txt     ps -Ao args= and ps -eo args while a process shows
-#                          "... zfs receive -s syngoidfx/x" in its argument list
+#   ps_ww.txt, ps_A.txt, ps_e.txt
+#                          ps -wwAo args=, ps -Ao args= and ps -eo args while a
+#                          process shows "... zfs receive -s syngoidfx/busy/..."
+#                          (a 218-character target) in its argument list; on
+#                          illumos ps_ww fails (no -w), which is itself the fixture
 #   grants.txt             the zfs allow commands that were run
 #   commands.txt           every capture with its exit status
 #   manifest.txt           uname -a and the zfs version
@@ -61,8 +64,8 @@ usr=sgxuser
 grp=sgxgrp
 fx="$pool/fx"
 
-# Kept short: illumos ps truncates the args column at 80 characters, and the
-# fake receive process below carries this path in its args.
+# Kept short: the fake receive process below carries this path in its args,
+# and only its long target name should make that ps line long.
 work=$(mktemp -d /var/tmp/sgx.XXXXXX)
 alt="$work/alt"
 img="$work/vdev"
@@ -257,18 +260,26 @@ errcap stderr_resume_source_gone.txt zfs send -t "$token"
 
 # --- ps ---------------------------------------------------------------------
 
-# A process whose argument list ends in "zfs receive -s syngoidfx/x". It is a
-# shell script named zfs (so there is no way to rename a binary portably), run
-# by path, hence ps shows "/bin/sh <work>/b/zfs receive -s syngoidfx/x" (the
-# interpreter first, plus the script's own "sleep" child). Fixtures of this
-# shape only prove the ps output format, header line and quoting; matching a
+# A process whose argument list ends in "zfs receive -s <long target>". It is
+# a shell script named zfs (so there is no way to rename a binary portably),
+# run by path, hence ps shows "/bin/sh <work>/b/zfs receive -s <target>" (the
+# interpreter first, plus the script's own "sleep" child). The target is a
+# valid but nonexistent 218-character dataset name, longer than FreeBSD's
+# 79-column ps line without -ww and illumos' 80-byte args: the fixtures show
+# where each ps form cuts a long receive line. Fixtures of this shape only
+# prove the ps output format, header line, width and quoting; matching a
 # receive is tested over the captured line.
+busy="$pool/busy"
+for _c in 1 2 3 4 5 6; do
+	busy="$busy/component-$_c-of-a-long-target-name"
+done
 mkdir "$work/b"
 printf '#!/bin/sh\nsleep 5\n' >"$work/b/zfs"
 chmod 755 "$work/b/zfs"
-"$work/b/zfs" receive -s "$pool/x" &
+"$work/b/zfs" receive -s "$busy" &
 fake_pid=$!
 sleep 1 # let the forked shell exec the script
+cap ps_ww.txt ps -wwAo args=
 cap ps_A.txt ps -Ao args=
 cap ps_e.txt ps -eo args
 kill "$fake_pid" 2>/dev/null || true

@@ -73,25 +73,43 @@ func (l *Local) Allow(ctx context.Context, ds string) (string, error) {
 	return l.Output(ctx, "allow", ds)
 }
 
-// processArgs lists the argument list of every process, one per line. It
-// prefers `ps -Ao args=` (no header line); when that fails, as on a ps that
-// rejects the "args=" header suppression, it falls back to `ps -eo args` and
-// drops the header line.
+// psForms are the ps invocations processArgs tries in order; header marks a
+// form whose first output line is a header.
+//
+// `-ww` comes first: without a tty FreeBSD ps cuts lines at 79 columns, and
+// the busy regex anchors on the dataset at the end of the line. illumos ps
+// has no -w and stores only the first 80 bytes of the arguments, so there a
+// receive into a long dataset name can still go unseen (spec §14 item 4).
+var psForms = []struct {
+	argv   []string
+	header bool
+}{
+	{[]string{"ps", "-wwAo", "args="}, false},
+	{[]string{"ps", "-Ao", "args="}, false}, // ps without -w (illumos)
+	{[]string{"ps", "-eo", "args"}, true},   // ps rejecting the "args=" header suppression
+}
+
+// processArgs lists the argument list of every process, one per line, from
+// the first ps form that succeeds. If every form fails it returns all their
+// errors joined.
 func (l *Local) processArgs(ctx context.Context) ([]string, error) {
-	var out strings.Builder
-	err := l.exec.Run(ctx, zfs.Cmd{Argv: []string{"ps", "-Ao", "args="}, Stdout: &out})
-	if err == nil {
-		return strings.Split(out.String(), "\n"), nil
+	var errs []error
+	for _, f := range psForms {
+		var out strings.Builder
+		err := l.exec.Run(ctx, zfs.Cmd{Argv: f.argv, Stdout: &out})
+		if err == nil {
+			s := out.String()
+			if f.header {
+				_, s, _ = strings.Cut(s, "\n")
+			}
+			return strings.Split(s, "\n"), nil
+		}
+		errs = append(errs, err)
+		if ctx.Err() != nil {
+			break
+		}
 	}
-	if ctx.Err() != nil {
-		return nil, err
-	}
-	out.Reset()
-	if err2 := l.exec.Run(ctx, zfs.Cmd{Argv: []string{"ps", "-eo", "args"}, Stdout: &out}); err2 != nil {
-		return nil, errors.Join(err, err2)
-	}
-	_, rest, _ := strings.Cut(out.String(), "\n")
-	return strings.Split(rest, "\n"), nil
+	return nil, errors.Join(errs...)
 }
 
 // ReceiveBusy lists processes once and reports which datasets are the target
