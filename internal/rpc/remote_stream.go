@@ -20,10 +20,11 @@ import (
 // agent's progress reports on the Remote's reader goroutine, so it must be
 // quick and must not call the Remote. Send returns once the agent has
 // answered (or cancelGrace has passed after a cancel), so the remote zfs
-// send has exited, and it never writes to w after returning: a Write in
-// progress is waited for. If w fails, the agent is told to cancel and Send
-// returns w's error; if ctx ends first, the agent is told to cancel and
-// Send returns ctx's error.
+// send has exited. It never starts a write to w after returning; a Write in
+// progress may outlive Send, and the caller unblocks it by closing w, so a
+// stalled w cannot block the return. If w fails, the agent is told to
+// cancel and Send returns w's error; if ctx ends first, the agent is told
+// to cancel and Send returns ctx's error.
 func (r *Remote) Send(ctx context.Context, s zfs.SendSpec, o endpoint.SendOpts, w io.Writer) error {
 	t, err := r.openTransfer(ctx, MethodSend, SendParams{Spec: s, Codec: o.Codec}, o.Progress)
 	if err != nil {
@@ -37,11 +38,11 @@ func (r *Remote) Send(ctx context.Context, s zfs.SendSpec, o endpoint.SendOpts, 
 		defer close(copied)
 		_, copyErr = io.CopyBuffer(sink, t.st, make([]byte, MaxFrameWrite))
 	}()
-	// halt ends the copy early and waits for it to return.
+	// halt ends the copy early: it starts no further write to w and its
+	// reads fail. It is not waited for, as it may be stuck in w.Write.
 	halt := func() {
 		sink.halted.Store(true)
 		t.unblock()
-		<-copied
 	}
 
 	var m Message
@@ -62,10 +63,8 @@ func (r *Remote) Send(ctx context.Context, s zfs.SendSpec, o endpoint.SendOpts, 
 			return r.lost(nil)
 		}
 	case <-ctx.Done():
-		sink.halted.Store(true)
-		t.unblock()
+		halt()
 		t.abandon()
-		<-copied
 		return ctx.Err()
 	}
 	if m.Error != nil {
@@ -73,7 +72,7 @@ func (r *Remote) Send(ctx context.Context, s zfs.SendSpec, o endpoint.SendOpts, 
 		return m.Error.Err()
 	}
 	// The agent closed the stream before answering, so the rest of it is
-	// already here: deliver it.
+	// already here: deliver it, for as long as ctx allows.
 	select {
 	case <-copied:
 		if sink.err != nil {

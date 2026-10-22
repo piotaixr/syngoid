@@ -62,6 +62,7 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, cfg Config) error {
 		cfg: cfg, sess: sess, codec: rpc.NewCodec(ctrl),
 		inflight:    map[uint64]context.CancelFunc{},
 		dataTimeout: dataStreamTimeout,
+		offerHook:   offerHook,
 	}
 	// Deferred after cancel, so it runs first: stop everything, then wait.
 	defer s.wg.Wait()
@@ -103,8 +104,10 @@ type server struct {
 	mu       sync.Mutex
 	inflight map[uint64]context.CancelFunc
 	streams  rendezvous
-	// dataTimeout is dataStreamTimeout as Serve started.
+	// dataTimeout and offerHook are the package variables as Serve
+	// started.
 	dataTimeout time.Duration
+	offerHook   func(id uint64, taken, parked bool)
 }
 
 // handshake reads the hello request and answers it.

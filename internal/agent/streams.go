@@ -23,6 +23,12 @@ var dataStreamTimeout = 30 * time.Second
 // send.
 var progressInterval = 500 * time.Millisecond
 
+// offerHook, when set as Serve starts, is told what became of each data
+// stream past its header: taken is false for a stream closed as a
+// duplicate, and parked is true for one that waits for its request. Tests
+// use it to order streams and requests.
+var offerHook func(id uint64, taken, parked bool)
+
 // errNoDataStream fails a send or receive whose data stream never came.
 var errNoDataStream = errors.New("no data stream")
 
@@ -116,12 +122,14 @@ func (s *server) offer(ctx context.Context, st *yamux.Stream) {
 	if sl.hasStream {
 		rv.mu.Unlock()
 		ds.close()
+		s.offered(id, false, false)
 		return
 	}
 	sl.hasStream = true
 	sl.stream <- ds
 	claimed := sl.hasRequest
 	rv.mu.Unlock()
+	s.offered(id, true, !claimed)
 	if claimed {
 		return
 	}
@@ -142,6 +150,12 @@ func (s *server) offer(ctx context.Context, st *yamux.Stream) {
 	rv.mu.Unlock()
 	if !claimed {
 		ds.close()
+	}
+}
+
+func (s *server) offered(id uint64, taken, parked bool) {
+	if s.offerHook != nil {
+		s.offerHook(id, taken, parked)
 	}
 }
 
