@@ -46,6 +46,11 @@ remediation, recursion, clones, bookmarks, holds, pruning, preflight permission 
   `ClientAliveInterval` (e.g. `15`) in the remote's `sshd_config` as well, so the remote agent and its `zfs receive`
   are stopped as quickly instead of after TCP gives up.
 
+Changes since milestone 1:
+
+- `syngoid version` prints the build hash too: `syngoid <version> (commit <commit>, build <hash12>) protocol <n>`.
+- With `--force-delete` a child dataset now waits for its parent, so a parent that fails skips its whole subtree.
+
 Not yet available (milestone 3): `syngoid fetch`, release downloads (`--no-download`, `--download-url`) and OTLP
 export (`--otel-endpoint`); the flags are accepted but have no effect yet.
 
