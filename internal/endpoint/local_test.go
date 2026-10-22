@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -134,6 +135,22 @@ func TestLocalReceiveBusyPsFallback(t *testing.T) {
 	want := map[string]bool{"tank/b": true, "tank/c": false}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ReceiveBusy = %v, want %v", got, want)
+	}
+}
+
+func TestLocalReceiveBusyPsFallbackBothFail(t *testing.T) {
+	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
+		"ps -Ao args=": {Stderr: "first form failed\n", Exit: 1},
+		"ps -eo args":  {Stderr: "second form failed\n", Exit: 1},
+	}}
+	_, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/b"})
+	if err == nil {
+		t.Fatal("want error")
+	}
+	for _, want := range []string{"first form failed", "second form failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
 	}
 }
 

@@ -43,6 +43,11 @@ fi
 
 mkdir -p "$1"
 out=$(cd "$1" && pwd)
+# Never mix fresh captures with stale files.
+if [ -n "$(ls -A "$out")" ]; then
+	echo "$0: $out is not empty" >&2
+	exit 2
+fi
 
 # zfs prints locale-dependent text; syngoid runs it with LC_ALL=C.
 LC_ALL=C
@@ -115,8 +120,9 @@ grant() {
 
 # Receives that end in the state under test. The pipelines return the status
 # of zfs receive; the sends' own stderr is not part of the capture.
-recv_truncated() { # SNAP DEST: leave a resumable partial receive in DEST
-	zfs send "$1" 2>/dev/null | dd bs=65536 count=16 2>/dev/null | zfs receive -s "$2" >/dev/null 2>&1
+recv_truncated() { # STREAMFILE DEST: leave a resumable partial receive in DEST
+	# Cut a file, not a pipe: dd counts reads, and a pipe returns short ones.
+	dd if="$1" bs=65536 count=16 2>/dev/null | zfs receive -s "$2" >/dev/null 2>&1
 }
 recv_full() { # SNAP DEST FLAGS...
 	_snap=$1
@@ -220,18 +226,26 @@ cap estimate_inc_I.txt zfs send -nvP -I "$fx/a@s1" "$fx/a@s3"
 zfs create "$fx/r"
 dd if=/dev/urandom of="$alt/$fx/r/file" bs=1024 count=4096 2>/dev/null
 zfs snapshot "$fx/r@r1"
-recv_truncated "$fx/r@r1" "$pool/rx" || true
+zfs send "$fx/r@r1" >"$work/r1.stream"
+recv_truncated "$work/r1.stream" "$pool/rx" || true
 token=$(zfs get -Hp -o value receive_resume_token "$pool/rx" 2>/dev/null || echo -)
-echo "resume token present: $([ "$token" != - ] && echo yes || echo no)" >>"$out/commands.txt"
+if [ -z "$token" ] || [ "$token" = - ]; then
+	echo "$0: the truncated receive left no resume token; the resume fixtures would be wrong" >&2
+	exit 1
+fi
 
 cap estimate_resume.txt zfs send -nvP -t "$token"
 errcap stderr_partial_state.txt recv_full "$fx/r@r1" "$pool/rx" -s -F
 errcap stderr_partial_state_noF.txt recv_full "$fx/r@r1" "$pool/rx" -s
 
-# The destination exists and is complete: a plain receive and a resumed one.
-recv_full "$fx/a@s1" "$pool/exist" >/dev/null 2>&1 || true
+# The destination already holds the snapshot being received (fx/r@r1, the
+# one the token resumes): a resumed receive and two plain ones. Which of them
+# produces "cannot restore to ...: destination already exists" is what the
+# captured files show.
+recv_full "$fx/r@r1" "$pool/exist" >/dev/null 2>&1
 errcap stderr_dest_exists.txt recv_resume "$token" "$pool/exist"
-errcap stderr_dest_exists_plain.txt recv_full "$fx/a@s1" "$pool/exist" -s
+errcap stderr_dest_exists_plain.txt recv_full "$fx/r@r1" "$pool/exist" -s -F
+errcap stderr_dest_exists_noF.txt recv_full "$fx/r@r1" "$pool/exist" -s
 
 errcap stderr_no_dataset.txt zfs list -H -o name "$pool/nope"
 errcap stderr_no_dataset_get.txt zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation -r "$pool/nope"
