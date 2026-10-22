@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,7 +32,7 @@ const (
 	stderrCap    = 64 * 1024
 	defaultWait  = 5 * time.Second // Proc.Close wait and Master.Close timeout
 	defaultGrace = 5 * time.Second // SIGTERM to SIGKILL escalation on cancel
-	pipeDelay    = 2 * time.Second // backstop for stray holders of a stderr pipe
+	pipeDelay    = 2 * time.Second // backstop for stray holders of a pipe
 )
 
 // Config is the ssh invocation configuration shared by every Master.
@@ -62,6 +63,9 @@ func (e *Error) Error() string {
 		if l = strings.TrimSpace(l); l != "" {
 			line = l
 		}
+	}
+	if line == "" {
+		return fmt.Sprintf("ssh %s: exit %d", e.Label, e.ExitCode)
 	}
 	return fmt.Sprintf("ssh %s: exit %d: %s", e.Label, e.ExitCode, line)
 }
@@ -135,7 +139,9 @@ func validName(s string, isUser bool) bool {
 // Label is "user@host" or "host".
 func (m *Master) Label() string { return m.label }
 
-func (m *Master) argv(control []string, remote string) []string {
+// argv builds the ssh command line. control holds our own options, placed
+// before the user's; when ownBatch is true they already include BatchMode.
+func (m *Master) argv(control []string, ownBatch bool, remote string) []string {
 	a := []string{m.cfg.SSH}
 	if m.cfg.ConfigFile != "" {
 		a = append(a, "-F", m.cfg.ConfigFile)
@@ -143,7 +149,7 @@ func (m *Master) argv(control []string, remote string) []string {
 	// Ours first: ssh keeps the first value of each option.
 	a = append(a, "-o", "ControlPath="+m.ctlp)
 	a = append(a, control...)
-	batch := !m.cfg.StdinIsTTY
+	batch := !ownBatch && !m.cfg.StdinIsTTY
 	for _, o := range m.cfg.Options {
 		a = append(a, "-o", o)
 		if optionKey(o) == "batchmode" {
@@ -166,15 +172,21 @@ func optionKey(o string) string {
 }
 
 func (m *Master) masterArgv() []string {
-	return m.argv([]string{"-o", "ControlMaster=yes", "-o", "ControlPersist=60"}, "exit")
+	return m.argv([]string{"-o", "ControlMaster=yes", "-o", "ControlPersist=60"}, false, "exit")
 }
 
 func (m *Master) clientArgv(cmd string) []string {
-	return m.argv([]string{"-o", "ControlMaster=no"}, cmd)
+	// A mux client never authenticates; BatchMode keeps it from blocking on
+	// a password prompt if the master is gone.
+	return m.argv([]string{"-o", "ControlMaster=no", "-o", "BatchMode=yes"}, true, cmd)
 }
 
 func (m *Master) exitArgv() []string {
-	return []string{m.cfg.SSH, "-o", "ControlPath=" + m.ctlp, "-O", "exit", "--", m.dest}
+	a := []string{m.cfg.SSH}
+	if m.cfg.ConfigFile != "" {
+		a = append(a, "-F", m.cfg.ConfigFile)
+	}
+	return append(a, "-o", "ControlPath="+m.ctlp, "-O", "exit", "--", m.dest)
 }
 
 func (m *Master) debug(argv []string) {
@@ -213,24 +225,36 @@ func (m *Master) grace() time.Duration {
 // Start brings the master up in the foreground process group with the
 // process's stdin so ssh can prompt for a password. The master then
 // daemonizes (ControlPersist). A failure is an *Error.
+//
+// The master's stderr goes to a file in the control directory, not a pipe: a
+// ProxyCommand child inherits it for the master's whole life, and a pipe read
+// end closed after Start would kill such a proxy with SIGPIPE.
 func (m *Master) Start(ctx context.Context) error {
 	argv := m.masterArgv()
 	m.debug(argv)
+	errFile, err := os.CreateTemp(filepath.Dir(m.ctlp), filepath.Base(m.ctlp)+".err-")
+	if err != nil {
+		return m.newError(argv, -1, "", err)
+	}
+	defer func() {
+		_ = errFile.Close()
+		_ = os.Remove(errFile.Name())
+	}()
+
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	if m.stdin != nil {
 		cmd.Stdin = m.stdin
 	} else {
 		cmd.Stdin = os.Stdin
 	}
-	cmd.Stdout = io.Discard
-	stderr := &tailBuffer{max: stderrCap}
-	cmd.Stderr = stderr
+	cmd.Stdout = nil // /dev/null
+	cmd.Stderr = errFile
 	// Same group as the caller: only the ssh process itself is signalled.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = pipeDelay
-	err := cmd.Run()
+	cmd.WaitDelay = pipeDelay // only matters for a non-file test stdin
+	err = cmd.Run()
 	if errors.Is(err, exec.ErrWaitDelay) {
-		err = nil // exited 0; the daemonized master kept a pipe open
+		err = nil // exited 0
 	}
 	if err == nil {
 		return nil
@@ -238,49 +262,50 @@ func (m *Master) Start(ctx context.Context) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("ssh %s: %w", m.label, ctxErr)
 	}
-	return m.exitError(argv, err, stderr.String())
+	return m.exitError(argv, err, readTail(errFile, stderrCap))
+}
+
+// readTail returns the last limit bytes of f.
+func readTail(f *os.File, limit int64) string {
+	fi, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	off := max(fi.Size()-limit, 0)
+	b := make([]byte, fi.Size()-off)
+	n, _ := f.ReadAt(b, off)
+	return string(b[:n])
 }
 
 // Run executes cmd on the remote host over the master, in its own process
 // group, and returns its stdout. A failure is an *Error carrying the last
-// 64 KiB of stderr. Cancelling ctx sends SIGTERM and then SIGKILL to the
-// whole group.
+// 64 KiB of stderr. Cancelling ctx sends SIGTERM to the whole group; if ssh
+// has not finished after the grace period it is killed and the group is
+// SIGKILLed.
 func (m *Master) Run(ctx context.Context, cmd string, stdin io.Reader) ([]byte, error) {
 	argv := m.clientArgv(cmd)
 	m.debug(argv)
-	c := exec.Command(argv[0], argv[1:]...)
+	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Stdin = stdin
 	var out bytes.Buffer
 	c.Stdout = &out
 	stderr := &tailBuffer{max: stderrCap}
 	c.Stderr = stderr
-	c.WaitDelay = pipeDelay + m.grace()
+	// Setpgid: the child leads its own group, so pgid == pid.
+	c.Cancel = func() error { return killGroup(c.Process.Pid, syscall.SIGTERM) }
+	// After a cancel this bounds both a leader ignoring SIGTERM and pipes
+	// still held by the mux master, so Run returns within the grace period.
+	c.WaitDelay = m.grace()
 
 	if err := c.Start(); err != nil {
 		return nil, m.newError(argv, -1, "", err)
 	}
-	pgid := c.Process.Pid // Setpgid: the child leads its own group
-	finished := make(chan struct{})
-	var watch sync.WaitGroup
-	watch.Add(1)
-	go func() {
-		defer watch.Done()
-		select {
-		case <-finished:
-		case <-ctx.Done():
-			_ = killGroup(pgid, syscall.SIGTERM)
-			select {
-			case <-finished:
-			case <-time.After(m.grace()):
-				_ = killGroup(pgid, syscall.SIGKILL)
-			}
-		}
-	}()
+	pgid := c.Process.Pid
 	err := c.Wait()
-	close(finished)
-	watch.Wait()
-
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil // exited 0; something kept a pipe open
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		_ = killGroup(pgid, syscall.SIGKILL) // reap members that outlived the leader
 		return nil, fmt.Errorf("ssh %s: %w", m.label, ctxErr)
@@ -363,6 +388,9 @@ func (m *Master) Close() error {
 	stop := context.AfterFunc(ctx, func() { _ = killGroup(pgid, syscall.SIGKILL) })
 	err := c.Wait()
 	stop()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
 	if ctx.Err() != nil {
 		return fmt.Errorf("ssh %s: -O exit: %w", m.label, ctx.Err())
 	}
@@ -462,8 +490,10 @@ func (b *tailBuffer) String() string {
 	return string(b.buf)
 }
 
-// ShellQuote quotes s for a POSIX shell: single quotes, with each embedded
-// single quote written as '\”.
+// ShellQuote quotes s for a POSIX shell in single quotes. Each embedded
+// single quote is written as the four characters below:
+//
+//	'\''
 func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
