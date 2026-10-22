@@ -9,10 +9,10 @@
 #
 #   tree.txt               zfs list -Hp -o name,type,origin,used,receive_resume_token,syncoid:sync -t filesystem,volume -r syngoidfx
 #   tree_single.txt        the same without -r, on "syngoidfx/fx/my data"
-#   snaps.txt              zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation -r syngoidfx
-#   snaps_d1.txt           the same with -d 1 on syngoidfx/fx/a
+#   snaps.txt              zfs get -Hp -r -t snapshot -o name,property,value guid,createtxg,creation syngoidfx
+#   snaps_d1.txt           the same with -d 1 instead of -r, on syngoidfx/fx/a
 #   snaps_all.txt          zfs get -Hp -r -o name,property,value all syngoidfx   (the ListSnapshots fallback)
-#   bookmarks.txt          zfs get -Hp -t bookmark ... -r syngoidfx
+#   bookmarks.txt          zfs get -Hp -r -t bookmark ... syngoidfx
 #   props.txt, props_local.txt   GetProps (recordsize) and LocalProps of syngoidfx/fx/a
 #   allow_fx_a.txt, allow_fx_a_c.txt   zfs allow on syngoidfx/fx/a and its clone syngoidfx/fx/a/c
 #   estimate_full.txt, estimate_inc.txt, estimate_inc_I.txt, estimate_resume.txt
@@ -229,10 +229,10 @@ grant -l -u "$usr" rename "$fx/a/c"
 
 cap tree.txt zfs list -Hp -o name,type,origin,used,receive_resume_token,syncoid:sync -t filesystem,volume -r "$pool"
 cap tree_single.txt zfs list -Hp -o name,type,origin,used,receive_resume_token,syncoid:sync -t filesystem,volume "$fx/my data"
-cap snaps.txt zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation -r "$pool"
-cap snaps_d1.txt zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation -d 1 "$fx/a"
+cap snaps.txt zfs get -Hp -r -t snapshot -o name,property,value guid,createtxg,creation "$pool"
+cap snaps_d1.txt zfs get -Hp -d 1 -t snapshot -o name,property,value guid,createtxg,creation "$fx/a"
 cap snaps_all.txt zfs get -Hp -r -o name,property,value all "$pool"
-cap bookmarks.txt zfs get -Hp -t bookmark -o name,property,value guid,createtxg,creation -r "$pool"
+cap bookmarks.txt zfs get -Hp -r -t bookmark -o name,property,value guid,createtxg,creation "$pool"
 cap props.txt zfs get -Hp -o property,value recordsize "$fx/a"
 cap props_local.txt zfs get -Hp -s local -o property,value all "$fx/a"
 cap allow_fx_a.txt zfs allow "$fx/a"
@@ -270,7 +270,7 @@ errcap stderr_dest_exists_plain.txt recv_full "$fx/r@r1" "$pool/exist" -s -F
 errcap stderr_dest_exists_noF.txt recv_full "$fx/r@r1" "$pool/exist" -s
 
 errcap stderr_no_dataset.txt zfs list -H -o name "$pool/nope"
-errcap stderr_no_dataset_get.txt zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation -r "$pool/nope"
+errcap stderr_no_dataset_get.txt zfs get -Hp -r -t snapshot -o name,property,value guid,createtxg,creation "$pool/nope"
 errcap stderr_recv_no_parent.txt recv_full "$fx/a@s1" "$pool/nope/child" -s -F
 
 # Resume after the source snapshot is gone.

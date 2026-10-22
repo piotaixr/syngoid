@@ -108,10 +108,11 @@ func depthArgs(recursive bool) []string {
 	return []string{"-d", "1"}
 }
 
+// getArgs is the typed snapshot or bookmark listing of root. Every option
+// precedes the operands: illumos zfs stops parsing options at the first one.
 func getArgs(kind string, recursive bool, root string) []string {
-	args := []string{"get", "-Hp", "-t", kind, "-o", "name,property,value", "guid,createtxg,creation"}
-	args = append(args, depthArgs(recursive)...)
-	return append(args, root)
+	args := append([]string{"get", "-Hp"}, depthArgs(recursive)...)
+	return append(args, "-t", kind, "-o", "name,property,value", "guid,createtxg,creation", root)
 }
 
 func fallbackArgs(recursive bool, root string) []string {

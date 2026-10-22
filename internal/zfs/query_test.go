@@ -23,12 +23,17 @@ func fixture(t *testing.T, name string) string {
 }
 
 const (
-	treeArgs = "zfs list -Hp -o name,type,origin,used,receive_resume_token,syncoid:sync -t filesystem,volume"
-	snapHead = "zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation"
-	bmHead   = "zfs get -Hp -t bookmark -o name,property,value guid,createtxg,creation"
-	allHead  = "zfs get -Hp"
-	allTail  = "-o name,property,value all"
+	treeArgs  = "zfs list -Hp -o name,type,origin,used,receive_resume_token,syncoid:sync -t filesystem,volume"
+	typedTail = "-o name,property,value guid,createtxg,creation"
+	allHead   = "zfs get -Hp"
+	allTail   = "-o name,property,value all"
 )
+
+// typedArgs is the typed snapshot or bookmark listing of root at depth "-r"
+// or "-d 1".
+func typedArgs(kind, depth, root string) string {
+	return "zfs get -Hp " + depth + " -t " + kind + " " + typedTail + " " + root
+}
 
 func newClient(resp map[string]zfstest.Response) (*zfs.Client, *zfstest.FakeExec) {
 	fe := &zfstest.FakeExec{Responses: resp}
@@ -96,7 +101,7 @@ func TestSnapshotTieBreakAcrossDatasetsAndCap(t *testing.T) {
 	for i := 0; i < 1005; i++ {
 		add("b/y@t" + strings.Repeat("x", i%7) + string(rune('A'+i%26)) + strings.Repeat("0", i/26))
 	}
-	c, _ := newClient(map[string]zfstest.Response{snapHead + " -r a": {Stdout: sb.String()}})
+	c, _ := newClient(map[string]zfstest.Response{typedArgs("snapshot", "-r", "a"): {Stdout: sb.String()}})
 	got, err := c.ListSnapshots(context.Background(), "a", true)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +126,7 @@ func TestListSnapshotsFallback(t *testing.T) {
 		"tank/a#b1\tguid\t11\n" +
 		"tank/a#b1\tcreation\t1700000001\n"
 	c, fe := newClient(map[string]zfstest.Response{
-		snapHead + " -d 1 tank/a":                {Exit: 2, Stderr: "invalid option 't'\n"},
+		typedArgs("snapshot", "-d 1", "tank/a"):  {Exit: 2, Stderr: "invalid option 't'\n"},
 		allHead + " -d 1 " + allTail + " tank/a": {Stdout: all},
 	})
 	got, err := c.ListSnapshots(context.Background(), "tank/a", false)
@@ -139,7 +144,7 @@ func TestListSnapshotsFallback(t *testing.T) {
 
 func TestListSnapshotsNoDatasetNoFallback(t *testing.T) {
 	c, fe := newClient(map[string]zfstest.Response{
-		snapHead + " -r nope": {Exit: 1, Stderr: "cannot open 'nope': dataset does not exist\n"},
+		typedArgs("snapshot", "-r", "nope"): {Exit: 1, Stderr: "cannot open 'nope': dataset does not exist\n"},
 	})
 	_, err := c.ListSnapshots(context.Background(), "nope", true)
 	if !errors.Is(err, zfs.ErrNoDataset) || len(fe.Calls) != 1 {
@@ -152,8 +157,8 @@ func TestListSnapshotsNoDatasetNoFallback(t *testing.T) {
 // from.
 func TestListBookmarks(t *testing.T) {
 	c, _ := newClient(map[string]zfstest.Response{
-		bmHead + " -r syngoidfx":   {Stdout: fixture(t, "linux/bookmarks.txt")},
-		snapHead + " -r syngoidfx": {Stdout: fixture(t, "linux/snaps.txt")},
+		typedArgs("bookmark", "-r", "syngoidfx"): {Stdout: fixture(t, "linux/bookmarks.txt")},
+		typedArgs("snapshot", "-r", "syngoidfx"): {Stdout: fixture(t, "linux/snaps.txt")},
 	})
 	ctx := context.Background()
 	got, err := c.ListBookmarks(ctx, "syngoidfx", true)
@@ -178,7 +183,7 @@ func TestListBookmarks(t *testing.T) {
 
 func TestListBookmarksUnsupported(t *testing.T) {
 	c, _ := newClient(map[string]zfstest.Response{
-		bmHead + " -d 1 tank": {Exit: 2, Stderr: "cannot get properties: invalid type 'bookmark'\n"},
+		typedArgs("bookmark", "-d 1", "tank"): {Exit: 2, Stderr: "cannot get properties: invalid type 'bookmark'\n"},
 	})
 	got, err := c.ListBookmarks(context.Background(), "tank", false)
 	if err != nil || got == nil || len(got) != 0 {
@@ -258,8 +263,8 @@ func TestQueryArgv(t *testing.T) {
 			}
 			want := []string{
 				pre + strings.TrimPrefix(treeArgs, "zfs") + " " + treeDepth + "tank/a",
-				pre + strings.TrimPrefix(bmHead, "zfs") + " " + depth + "tank/a",
-				pre + strings.TrimPrefix(snapHead, "zfs") + " " + depth + "tank/a",
+				pre + strings.TrimPrefix(typedArgs("bookmark", strings.TrimSpace(depth), "tank/a"), "zfs"),
+				pre + strings.TrimPrefix(typedArgs("snapshot", strings.TrimSpace(depth), "tank/a"), "zfs"),
 				pre + strings.TrimPrefix(allHead, "zfs") + " " + depth + allTail + " tank/a",
 				pre + " get -Hp -o property,value guid,type tank/a",
 				pre + " get -Hp -s local -o property,value all tank/a",
@@ -267,6 +272,42 @@ func TestQueryArgv(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("sudo=%v rec=%v\ngot  %q\nwant %q", sudo, rec, got, want)
+			}
+		}
+	}
+}
+
+// TestQueryArgvOptionsBeforeOperands: illumos zfs stops parsing options at
+// the first operand (the captured "zfs get ... guid,createtxg,creation -r
+// syngoidfx" failed there with "cannot open '-r'"), so every option of a
+// query must precede its operands.
+func TestQueryArgvOptionsBeforeOperands(t *testing.T) {
+	withArg := map[string]bool{"-o": true, "-t": true, "-s": true, "-d": true}
+	for _, rec := range []bool{false, true} {
+		fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{}}
+		c := &zfs.Client{Exec: fe}
+		ctx := context.Background()
+		_, _ = c.ListTree(ctx, "tank/a", rec)
+		_, _ = c.ListBookmarks(ctx, "tank/a", rec)
+		_, _ = c.ListSnapshots(ctx, "tank/a", rec) // typed, then the fallback
+		_, _ = c.GetProps(ctx, "tank/a", "guid")
+		_, _ = c.LocalProps(ctx, "tank/a")
+		_, _ = c.Exists(ctx, "tank/a")
+		if len(fe.Calls) != 7 {
+			t.Fatalf("calls = %q", fe.Calls)
+		}
+		for _, call := range fe.Calls {
+			args := call[2:] // after "zfs get" / "zfs list"
+			for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+				if withArg[args[0]] {
+					args = args[1:]
+				}
+				args = args[1:]
+			}
+			for _, a := range args {
+				if strings.HasPrefix(a, "-") {
+					t.Errorf("option %q after an operand in %q", a, call)
+				}
 			}
 		}
 	}
