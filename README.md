@@ -16,12 +16,15 @@ remediation, recursion, clones, bookmarks, holds, pruning, preflight permission 
 
 - **Self-pushed agent.** syngoid uses the system `ssh` (one ControlMaster per host, so one password prompt or
   hardware-key touch) and needs no installation on the remote. On first use it pushes its own binary to
-  `~/.cache/syngoid/<version>/syngoid` on that host (change the directory with `--remote-bin-dir`), starts
+  `~/.cache/syngoid/<version>/syngoid` on that host (`<version>-<hash8>/`, with the first 8 hex digits of the build
+  hash, for a development build; change the directory with `--remote-bin-dir`), starts
   `syngoid serve` there and talks to it over the ssh connection. Later runs reuse the pushed binary; older version
   directories are pruned. The remote needs no `mbuffer`, `pv` or compressor.
 - **Other platforms.** The running binary is pushed as is when the remote has the same OS and architecture. For any
   other platform syngoid looks for `DIR/<os>-<arch>/syngoid` (for example `freebsd-amd64`) in each `--bin-store DIR`,
-  then in `/usr/lib/syngoid/bin`, and fails with the missing path otherwise.
+  then in `/usr/lib/syngoid/bin`, and fails with the missing path otherwise. A development build (version `dev`)
+  only accepts an agent with its own build hash, so build the initiator and every `--bin-store` binary with the same
+  stamped hash ([Build](#build)); otherwise the handshake fails with `agent mismatch: build hash …`.
 - **Delegation on remotes.** Preflight checks the remote user's `zfs allow` delegations on the remote host. Missing
   grants are printed per host so each line can be pasted on the right machine:
 
@@ -58,6 +61,19 @@ CGO_ENABLED=0 mise exec -- go build -o syngoid ./cmd/syngoid
 With a matching Go on your `PATH`, `CGO_ENABLED=0 go build -o syngoid ./cmd/syngoid` works too. Supported targets:
 Linux, FreeBSD, illumos and macOS. Version information can be stamped with
 `-ldflags "-X github.com/piotaixr/syngoid/internal/buildinfo.Version=… -X github.com/piotaixr/syngoid/internal/buildinfo.Commit=…"`.
+
+Without a stamped hash a development build identifies itself by the SHA-256 of its executable, so binaries built
+for different platforms never match as initiator and agent. Stamp the same
+`-X github.com/piotaixr/syngoid/internal/buildinfo.Hash=<value>` (or a release `Version`) into all of them, for
+example a local binary plus a `--bin-store` for a FreeBSD remote:
+
+```sh
+h=$(git rev-parse HEAD)
+CGO_ENABLED=0 go build -ldflags "-X github.com/piotaixr/syngoid/internal/buildinfo.Hash=$h" -o syngoid ./cmd/syngoid
+CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -ldflags "-X github.com/piotaixr/syngoid/internal/buildinfo.Hash=$h" \
+  -o store/freebsd-amd64/syngoid ./cmd/syngoid
+./syngoid --bin-store store tank/data backup@freebsd-nas:pool/data
+```
 
 Tests and lint:
 

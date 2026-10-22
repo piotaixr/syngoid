@@ -50,8 +50,14 @@ func TestCheckHello(t *testing.T) {
 	for name, tt := range tests {
 		r := matchingReply()
 		tt.edit(&r)
-		if err := CheckHello(r, tt.pushed); !errors.Is(err, ErrMismatch) {
+		err := CheckHello(r, tt.pushed)
+		if !errors.Is(err, ErrMismatch) {
 			t.Errorf("%s: CheckHello = %v, want ErrMismatch", name, err)
+		}
+		// Only a dev build-hash difference carries the stamping hint.
+		const hint = "-X github.com/piotaixr/syngoid/internal/buildinfo.Hash="
+		if hasHint := err != nil && strings.Contains(err.Error(), hint); hasHint != (name == "build hash") {
+			t.Errorf("%s: hint present = %v: %v", name, hasHint, err)
 		}
 	}
 }
