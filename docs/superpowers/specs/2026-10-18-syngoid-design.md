@@ -262,9 +262,10 @@ failure names `--bin-store=DIR` and `/usr/lib/syngoid/bin/<os>-<arch>/syngoid`.
 
 ### 5.4 Push
 
-`ssh host sh -c 'umask 077; T="$1/.syngoid.tmp.$$"; mkdir -p "$1" && cat > "$T" && n=$(wc -c < "$T") && [ $n -eq "$2" ] && chmod 700 "$T" && mv -f "$T" "$1/syngoid" || { rm -f "$T"; exit 1; }' syngoid-push '<D>' '<size>'`
+`ssh host sh -c 'umask 077; T="$1/.syngoid.tmp.$$"; mkdir -p "$1" && chmod 700 "$1" && cat > "$T" && n=$(wc -c < "$T") && [ $n -eq "$2" ] && chmod 700 "$T" && mv -f "$T" "$1/syngoid" || { rm -f "$T"; exit 1; }' syngoid-push '<D>' '<size>'`
 with the binary on stdin. `<D>` is the probe's absolute bin dir, single-quoted; `<size>` is the binary's byte count.
-A push cut short (cancelled, or a failed local read) ends `cat` with a plain EOF, so the size check keeps a
+The agent directory is forced to 0700 even when it already existed, since a
+group-writable one would let others replace `syngoid`. A push cut short (cancelled, or a failed local read) ends `cat` with a plain EOF, so the size check keeps a
 truncated file from being installed; any failure removes the temporary file. `$n` stays unquoted because BSD `wc`
 pads its count with spaces. The initiator logs
 `INFO: [<host>] pushing syngoid agent to <host>:<D>/syngoid` and keeps the SHA-256 of the file it pushed.

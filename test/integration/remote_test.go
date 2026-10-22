@@ -4,6 +4,7 @@ package integration
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -78,6 +79,7 @@ func TestITRemoteTargetDelegated(t *testing.T) {
 		t.Error(err)
 	} else if dirSt.Mode().Perm() != 0o700 {
 		t.Errorf("mode of %s = %v, want 0700", filepath.Dir(agent), dirSt.Mode().Perm())
+		logModes(t, agent)
 	}
 	if g, w := fileSHA256(t, agent), fileSHA256(t, binPath); g != w {
 		t.Errorf("SHA-256 of the pushed agent = %s, want the built binary's %s", g, w)
@@ -88,6 +90,21 @@ func TestITRemoteTargetDelegated(t *testing.T) {
 	}
 	requireSameGUID(t, src, dst, "s1")
 	requireNewestSyncGUID(t, src, dst)
+}
+
+// logModes logs ls -ld, and getfacl when available, of the agent dir and
+// its parents up to the home directory, to explain a wrong mode.
+func logModes(t *testing.T, agent string) {
+	t.Helper()
+	dir := filepath.Dir(agent)                            // <home>/.cache/syngoid/<dir>
+	home := filepath.Dir(filepath.Dir(filepath.Dir(dir))) // <home>
+	paths := []string{home, filepath.Join(home, ".cache"), filepath.Join(home, ".cache", "syngoid"), dir}
+	out, err := exec.Command("ls", append([]string{"-ld"}, paths...)...).CombinedOutput()
+	t.Logf("ls -ld (%v):\n%s", err, out)
+	if _, err := exec.LookPath("getfacl"); err == nil {
+		out, err := exec.Command("getfacl", append([]string{"-p"}, paths...)...).CombinedOutput()
+		t.Logf("getfacl (%v):\n%s", err, out)
+	}
 }
 
 func TestITRemoteSource(t *testing.T) {
