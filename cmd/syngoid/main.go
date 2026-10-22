@@ -15,7 +15,10 @@ import (
 	"golang.org/x/term"
 
 	"github.com/piotaixr/syngoid/internal/app"
+	"github.com/piotaixr/syngoid/internal/bootstrap"
+	"github.com/piotaixr/syngoid/internal/cli"
 	"github.com/piotaixr/syngoid/internal/endpoint"
+	"github.com/piotaixr/syngoid/internal/sshx"
 	"github.com/piotaixr/syngoid/internal/zfs"
 )
 
@@ -25,17 +28,21 @@ func main() {
 	go forceExitOnSecondSignal(ctx)
 
 	var logger *slog.Logger
+	stdinIsTTY := isTTY(os.Stdin)
 	env := app.Env{
 		Stdin:       os.Stdin,
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
-		StdinIsTTY:  isTTY(os.Stdin),
+		StdinIsTTY:  stdinIsTTY,
 		StderrIsTTY: isTTY(os.Stderr),
 		Hostname:    os.Hostname,
 		Now:         time.Now,
 		NewLocal: func(sudo bool) endpoint.Endpoint {
 			x := zfs.OSExec{Log: logger}
 			return endpoint.NewLocal(&zfs.Client{Exec: x, Sudo: sudo}, x)
+		},
+		NewConnector: func(o *cli.Options, log *slog.Logger) (app.Connector, error) {
+			return newConnector(o, log, stdinIsTTY)
 		},
 		LoggerReady: func(l *slog.Logger) { logger = l },
 		PoolExists:  (&pools{exec: zfs.OSExec{}, stderr: os.Stderr}).exists,
@@ -44,6 +51,36 @@ func main() {
 	stop()
 	os.Exit(code)
 }
+
+// poolConnector adapts a bootstrap.Pool to app.Connector.
+type poolConnector struct{ pool *bootstrap.Pool }
+
+// newConnector returns a Connector of ssh masters and self-pushed agents
+// configured from o.
+func newConnector(o *cli.Options, log *slog.Logger, stdinIsTTY bool) (app.Connector, error) {
+	pool, err := bootstrap.NewSSHPool(
+		sshx.Config{Options: o.SSHOptions, ConfigFile: o.SSHConfig, StdinIsTTY: stdinIsTTY, Log: log},
+		bootstrap.Options{
+			RemoteBinDir: o.RemoteBinDir,
+			Resolver:     bootstrap.Resolver{BinStores: o.BinStores},
+			Debug:        o.Debug,
+			Log:          log,
+		})
+	if err != nil {
+		return nil, err
+	}
+	return poolConnector{pool}, nil
+}
+
+func (c poolConnector) Endpoint(ctx context.Context, loc cli.Location, sudo bool) (endpoint.Endpoint, error) {
+	r, err := c.pool.Endpoint(ctx, loc.User, loc.Host, sudo)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (c poolConnector) Close() error { return c.pool.Close() }
 
 // forceExitOnSecondSignal waits for the first SIGINT, SIGTERM or SIGHUP (which
 // cancels ctx and starts the graceful shutdown), then exits with code 2 on

@@ -8,18 +8,39 @@ and honours the same `syncoid:sync` property, so it can take over an existing sy
 Like sanoid/syncoid, syngoid is licensed under the GNU GPL v3; see [LICENSE](LICENSE). The design is described in
 the [spec](docs/superpowers/specs/2026-10-18-syngoid-design.md).
 
-## Status: milestone 1 (local → local)
+## Status: milestone 2 (remote)
 
-This milestone replicates between datasets on the **same host** only. The full sync engine is in place: planner,
-executor, resume and remediation, recursion, clones, bookmarks, holds, pruning, preflight permission checks,
-`--dry-run` and `--confirm`.
+SOURCE and TARGET may now be `[user@]host:pool/dataset`, replicated over SSH between any two hosts (local → remote,
+remote → local, remote → remote). The sync engine of milestone 1 is unchanged: planner, executor, resume and
+remediation, recursion, clones, bookmarks, holds, pruning, preflight permission checks, `--dry-run` and `--confirm`.
 
-Not yet available:
+- **Self-pushed agent.** syngoid uses the system `ssh` (one ControlMaster per host, so one password prompt or
+  hardware-key touch) and needs no installation on the remote. On first use it pushes its own binary to
+  `~/.cache/syngoid/<version>/syngoid` on that host (change the directory with `--remote-bin-dir`), starts
+  `syngoid serve` there and talks to it over the ssh connection. Later runs reuse the pushed binary; older version
+  directories are pruned. The remote needs no `mbuffer`, `pv` or compressor.
+- **Other platforms.** The running binary is pushed as is when the remote has the same OS and architecture. For any
+  other platform syngoid looks for `DIR/<os>-<arch>/syngoid` (for example `freebsd-amd64`) in each `--bin-store DIR`,
+  then in `/usr/lib/syngoid/bin`, and fails with the missing path otherwise.
+- **Delegation on remotes.** Preflight checks the remote user's `zfs allow` delegations on the remote host. Missing
+  grants are printed per host so each line can be pasted on the right machine:
 
-- remote endpoints (`[user@]host:pool/dataset`, SSH, the self-pushed agent) arrive in milestone 2. Remote arguments
-  exit with an error; the SSH and agent flags are accepted but have no effect yet;
-- `syngoid fetch`, `syngoid serve` and release downloads (milestones 2–3);
-- `--compress` only applies to network hops, so it has no effect locally.
+  ```
+  CRITICAL ERROR: missing ZFS permissions
+    source backup@db1:tank/data: snapshot, destroy
+    target backup@nas:tank/backups: receive
+  Grant them (as root) with:
+    [db1]  zfs allow -u backup snapshot,destroy,mount tank/data
+    [nas]  zfs allow -u backup receive,create,mount tank/backups
+  ```
+
+- **`--sudo` on a remote** (also `--source-sudo` / `--target-sudo`) makes the agent run `sudo -n zfs …` there. The
+  agent itself never runs under sudo.
+- **Compression.** `--compress` applies to the stream whenever a side is remote and is ignored for local → local.
+- A failed connection, push or handshake is a global failure: exit code 2.
+
+Not yet available (milestone 3): `syngoid fetch`, release downloads (`--no-download`, `--download-url`) and OTLP
+export (`--otel-endpoint`); the flags are accepted but have no effect yet.
 
 ## Build
 
@@ -50,8 +71,8 @@ syngoid permissions [flags] SOURCE TARGET
 syngoid version
 ```
 
-`sync` is the default subcommand. SOURCE and TARGET are local datasets; they must differ and neither may be inside
-the other. `syngoid --help` lists every flag.
+`sync` is the default subcommand. SOURCE and TARGET are datasets, local or `[user@]host:dataset`; they must differ and
+neither may be inside the other. `syngoid --help` lists every flag.
 
 ```sh
 # Replicate tank/data to backup/data (created by the first run).
@@ -71,6 +92,16 @@ syngoid permissions -r tank/data backup/data
 
 # Run zfs through sudo -n on the target only.
 syngoid --target-sudo tank/data backup/data
+
+# Push to a remote host; pass ssh options with -o and compress the stream.
+syngoid -r --compress=zstd-fast -o Port=2222 tank/data backup@nas:pool/data
+
+# Pull from a remote host, or relay between two (the stream goes through this machine).
+syngoid -r db1:tank/data backup/data
+syngoid -r db1:tank/data nas:pool/data
+
+# Check the delegations on both hosts.
+syngoid permissions -r tank/data backup@nas:pool/data
 ```
 
 Options kept from syncoid with the same meaning include `-r/--recursive`, `--skip-parent`, `--identifier`,
