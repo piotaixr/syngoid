@@ -1,0 +1,2 @@
+cannot open '-r': missing '@' delimiter in snapshot name
+cannot open 'syngoidfx/nope': missing '@' delimiter in snapshot name

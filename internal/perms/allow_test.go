@@ -32,46 +32,45 @@ func keys(m map[string]bool) string {
 	return strings.Join(ks, ",")
 }
 
-func TestEffectiveDescendant(t *testing.T) {
-	d := load(t, "allow_basic.txt")
-	got := Effective(d, "tank/backups/vm", "backup", []string{"backup", "zfsadm"})
-	for _, p := range []string{"hold", "create", "mount", "receive", "release", "destroy", "bookmark"} {
-		if !got[p] {
-			t.Errorf("missing %q in %s", p, keys(got))
-		}
-	}
-	if got["snapshot"] {
-		t.Errorf("snapshot (local-only on ancestor) must not apply: %s", keys(got))
-	}
-}
+// capturedOS are the platforms with captured zfs allow output in
+// testdata/<os> (grants.txt lists the zfs allow commands that produced it).
+var capturedOS = []string{"linux", "freebsd", "illumos"}
 
-func TestEffectiveSelfLocalOnly(t *testing.T) {
-	d := load(t, "allow_basic.txt")
-	got := Effective(d, "tank/backups", "backup", []string{"backup", "zfsadm"})
-	if !got["snapshot"] {
-		t.Errorf("snapshot missing: %s", keys(got))
+// TestEffectiveCaptured resolves the grants of grants.txt from the captured
+// zfs allow output of syngoidfx/fx/a and its clone syngoidfx/fx/a/c. The pool
+// grants mount to sgxgrp (local+descendent) and defines the unused @poolset;
+// fx/a grants sgxuser snapshot,hold and @set1 (create,mount,receive)
+// local+descendent and release local only, sgxgrp send local+descendent and
+// destroy descendent only, everyone bookmark, and create-time
+// create,mount,snapshot; the clone grants sgxuser rename locally.
+func TestEffectiveCaptured(t *testing.T) {
+	grp := []string{"sgxgrp"}
+	tests := []struct {
+		name, file, dataset, user string
+		groups                    []string
+		want                      string
+	}{
+		{"self", "allow_fx_a.txt", "syngoidfx/fx/a", "sgxuser", grp, "bookmark,create,hold,mount,receive,release,send,snapshot"},
+		{"self without groups", "allow_fx_a.txt", "syngoidfx/fx/a", "sgxuser", nil, "bookmark,create,hold,mount,receive,release,snapshot"},
+		{"other user", "allow_fx_a.txt", "syngoidfx/fx/a", "alice", nil, "bookmark"},
+		{"other user in group", "allow_fx_a.txt", "syngoidfx/fx/a", "alice", grp, "bookmark,mount,send"},
+		// The clone gains the descendent destroy and its own rename, and
+		// loses the release that is local to fx/a.
+		{"descendant", "allow_fx_a_c.txt", "syngoidfx/fx/a/c", "sgxuser", grp, "bookmark,create,destroy,hold,mount,receive,rename,send,snapshot"},
+		{"parent of the clone", "allow_fx_a_c.txt", "syngoidfx/fx/a", "sgxuser", grp, "bookmark,create,hold,mount,receive,release,send,snapshot"},
+		{"descendant group only", "allow_fx_a_c.txt", "syngoidfx/fx/a/c", "alice", grp, "bookmark,destroy,mount,send"},
+		{"prefix sibling", "allow_fx_a.txt", "syngoidfx/fx/ab", "sgxuser", grp, "mount"},
+		{"pool", "allow_fx_a.txt", "syngoidfx", "sgxuser", grp, "mount"},
 	}
-	if got["destroy"] {
-		t.Errorf("descendent-only destroy must not apply to self: %s", keys(got))
-	}
-	if got["hold"] {
-		t.Errorf("hold on a child must not apply to parent: %s", keys(got))
-	}
-}
-
-func TestEffectiveOtherUser(t *testing.T) {
-	d := load(t, "allow_basic.txt")
-	got := Effective(d, "tank/backups/vm", "alice", nil)
-	if keys(got) != "bookmark" {
-		t.Errorf("got %s, want bookmark", keys(got))
-	}
-}
-
-func TestEffectiveUnrelatedDataset(t *testing.T) {
-	d := load(t, "allow_basic.txt")
-	got := Effective(d, "tank/backupsX", "backup", []string{"zfsadm"})
-	if len(got) != 0 {
-		t.Errorf("prefix-sibling dataset must get nothing, got %s", keys(got))
+	for _, osName := range capturedOS {
+		t.Run(osName, func(t *testing.T) {
+			for _, tt := range tests {
+				d := load(t, filepath.Join(osName, tt.file))
+				if got := keys(Effective(d, tt.dataset, tt.user, tt.groups)); got != tt.want {
+					t.Errorf("%s: got %s, want %s", tt.name, got, tt.want)
+				}
+			}
+		})
 	}
 }
 
@@ -82,14 +81,6 @@ func TestParseAllowEmpty(t *testing.T) {
 	}
 	if got := Effective(d, "tank", "backup", []string{"g"}); len(got) != 0 {
 		t.Errorf("got %s", keys(got))
-	}
-}
-
-func TestParseAllowIgnoresCreateTime(t *testing.T) {
-	d := load(t, "allow_createtime.txt")
-	got := Effective(d, "tank/data", "backup", nil)
-	if keys(got) != "send" {
-		t.Errorf("got %s, want send", keys(got))
 	}
 }
 
@@ -169,12 +160,14 @@ func TestParseAllowErrors(t *testing.T) {
 }
 
 func FuzzParseAllow(f *testing.F) {
-	for _, n := range []string{"allow_basic.txt", "allow_createtime.txt"} {
-		b, err := os.ReadFile(filepath.Join("testdata", n))
-		if err != nil {
-			f.Fatal(err)
+	for _, osName := range capturedOS {
+		for _, n := range []string{"allow_fx_a.txt", "allow_fx_a_c.txt"} {
+			b, err := os.ReadFile(filepath.Join("testdata", osName, n))
+			if err != nil {
+				f.Fatal(err)
+			}
+			f.Add(string(b))
 		}
-		f.Add(string(b))
 	}
 	f.Add("")
 	f.Add("\t\n---- Permissions on  ----\n@")

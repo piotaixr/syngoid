@@ -1,0 +1,2 @@
+full	syngoidfx/fx/a@s1	4215664
+size	4215664

@@ -1,0 +1,2 @@
+cannot open 'syngoidfx/nope': dataset does not exist
+cannot receive new filesystem stream: unable to restore to destination

@@ -1,0 +1,53 @@
+[kernel]
+/sbin/init
+[clock]
+[crypto]
+[cam]
+[busdma]
+[zfskern]
+[rand_harvestq]
+[pagedaemon]
+[vmdaemon]
+[audit]
+[idle]
+[intr]
+[geom]
+[usb]
+[bufdaemon]
+[vnlru]
+[syncer]
+dhclient: system.syslog (dhclient)
+dhclient: vtnet0 [priv] (dhclient)
+dhclient: vtnet0 (dhclient)
+/sbin/devd
+/usr/sbin/syslogd -s
+syslogd: syslogd.casper (syslogd)
+syslogd: system.net (syslogd)
+/usr/sbin/ntpd -p /var/db/ntp/ntpd.pid -c /etc/ntp.conf -f /var/db/ntp/ntpd.drift
+/usr/sbin/cron -s
+sshd: /usr/sbin/sshd [listener] 0 of 10-100 startups (sshd)
+logger: system.syslog (logger)
+sshd-session: root [priv] (sshd-session)
+sshd-session: root@notty (sshd-session)
+sh
+sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-out
+[aiod1]
+[aiod2]
+[aiod3]
+[aiod4]
+/bin/sh /var/tmp/sgx.1yf3gY/b/zfs receive -s syngoidfx/busy/component-1-of-a-long-target-name/component-2-of-a-long-target-name/component-3-of-a-long-target-name/component-4-of-a-long-target-name/component-5-of-a-long-target-name/component-6-of-a-long-target-name
+sleep 5
+ps -Ao args=
+/bin/sh -o verify /etc/rc autoboot
+logger -p daemon.notice -t fsck
+sleep 60
+/usr/libexec/getty 3wire ttyu0
+login [pam] (login)
+-sh (sh)
+/usr/libexec/getty Pc ttyv1
+/usr/libexec/getty Pc ttyv2
+/usr/libexec/getty Pc ttyv3
+/usr/libexec/getty Pc ttyv4
+/usr/libexec/getty Pc ttyv5
+/usr/libexec/getty Pc ttyv6
+/usr/libexec/getty Pc ttyv7

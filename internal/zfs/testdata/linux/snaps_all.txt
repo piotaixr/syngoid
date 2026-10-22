@@ -1,0 +1,641 @@
+syngoidfx	type	filesystem
+syngoidfx	creation	1792702844
+syngoidfx	used	5629952
+syngoidfx	available	120199168
+syngoidfx	referenced	24576
+syngoidfx	compressratio	1.00
+syngoidfx	mounted	yes
+syngoidfx	quota	0
+syngoidfx	reservation	0
+syngoidfx	recordsize	131072
+syngoidfx	mountpoint	/var/tmp/sgx.ZQT2g4/alt/syngoidfx
+syngoidfx	sharenfs	off
+syngoidfx	checksum	on
+syngoidfx	compression	off
+syngoidfx	atime	off
+syngoidfx	devices	on
+syngoidfx	exec	on
+syngoidfx	setuid	on
+syngoidfx	readonly	off
+syngoidfx	zoned	off
+syngoidfx	snapdir	hidden
+syngoidfx	aclmode	discard
+syngoidfx	aclinherit	restricted
+syngoidfx	createtxg	1
+syngoidfx	canmount	on
+syngoidfx	xattr	on
+syngoidfx	copies	1
+syngoidfx	version	5
+syngoidfx	utf8only	off
+syngoidfx	normalization	none
+syngoidfx	casesensitivity	sensitive
+syngoidfx	vscan	off
+syngoidfx	nbmand	off
+syngoidfx	sharesmb	off
+syngoidfx	refquota	0
+syngoidfx	refreservation	0
+syngoidfx	guid	17633463715124006763
+syngoidfx	primarycache	all
+syngoidfx	secondarycache	all
+syngoidfx	usedbysnapshots	0
+syngoidfx	usedbydataset	24576
+syngoidfx	usedbychildren	5605376
+syngoidfx	usedbyrefreservation	0
+syngoidfx	logbias	latency
+syngoidfx	objsetid	54
+syngoidfx	dedup	off
+syngoidfx	mlslabel	none
+syngoidfx	sync	standard
+syngoidfx	dnodesize	legacy
+syngoidfx	refcompressratio	1.00
+syngoidfx	written	24576
+syngoidfx	logicalused	5400576
+syngoidfx	logicalreferenced	12288
+syngoidfx	volmode	default
+syngoidfx	filesystem_limit	none
+syngoidfx	snapshot_limit	none
+syngoidfx	filesystem_count	none
+syngoidfx	snapshot_count	none
+syngoidfx	snapdev	hidden
+syngoidfx	acltype	off
+syngoidfx	context	none
+syngoidfx	fscontext	none
+syngoidfx	defcontext	none
+syngoidfx	rootcontext	none
+syngoidfx	relatime	on
+syngoidfx	redundant_metadata	all
+syngoidfx	overlay	on
+syngoidfx	encryption	off
+syngoidfx	keylocation	none
+syngoidfx	keyformat	none
+syngoidfx	pbkdf2iters	0
+syngoidfx	special_small_blocks	0
+syngoidfx/fx	type	filesystem
+syngoidfx/fx	creation	1792702845
+syngoidfx/fx	used	5390336
+syngoidfx/fx	available	120199168
+syngoidfx/fx	referenced	25600
+syngoidfx/fx	compressratio	1.00
+syngoidfx/fx	mounted	yes
+syngoidfx/fx	quota	0
+syngoidfx/fx	reservation	0
+syngoidfx/fx	recordsize	131072
+syngoidfx/fx	mountpoint	/var/tmp/sgx.ZQT2g4/alt/syngoidfx/fx
+syngoidfx/fx	sharenfs	off
+syngoidfx/fx	checksum	on
+syngoidfx/fx	compression	off
+syngoidfx/fx	atime	off
+syngoidfx/fx	devices	on
+syngoidfx/fx	exec	on
+syngoidfx/fx	setuid	on
+syngoidfx/fx	readonly	off
+syngoidfx/fx	zoned	off
+syngoidfx/fx	snapdir	hidden
+syngoidfx/fx	aclmode	discard
+syngoidfx/fx	aclinherit	restricted
+syngoidfx/fx	createtxg	9
+syngoidfx/fx	canmount	on
+syngoidfx/fx	xattr	on
+syngoidfx/fx	copies	1
+syngoidfx/fx	version	5
+syngoidfx/fx	utf8only	off
+syngoidfx/fx	normalization	none
+syngoidfx/fx	casesensitivity	sensitive
+syngoidfx/fx	vscan	off
+syngoidfx/fx	nbmand	off
+syngoidfx/fx	sharesmb	off
+syngoidfx/fx	refquota	0
+syngoidfx/fx	refreservation	0
+syngoidfx/fx	guid	2497423373982398239
+syngoidfx/fx	primarycache	all
+syngoidfx/fx	secondarycache	all
+syngoidfx/fx	usedbysnapshots	0
+syngoidfx/fx	usedbydataset	25600
+syngoidfx/fx	usedbychildren	5364736
+syngoidfx/fx	usedbyrefreservation	0
+syngoidfx/fx	logbias	latency
+syngoidfx/fx	objsetid	259
+syngoidfx/fx	dedup	off
+syngoidfx/fx	mlslabel	none
+syngoidfx/fx	sync	standard
+syngoidfx/fx	dnodesize	legacy
+syngoidfx/fx	refcompressratio	1.00
+syngoidfx/fx	written	25600
+syngoidfx/fx	logicalused	5316608
+syngoidfx/fx	logicalreferenced	12800
+syngoidfx/fx	volmode	default
+syngoidfx/fx	filesystem_limit	none
+syngoidfx/fx	snapshot_limit	none
+syngoidfx/fx	filesystem_count	none
+syngoidfx/fx	snapshot_count	none
+syngoidfx/fx	snapdev	hidden
+syngoidfx/fx	acltype	off
+syngoidfx/fx	context	none
+syngoidfx/fx	fscontext	none
+syngoidfx/fx	defcontext	none
+syngoidfx/fx	rootcontext	none
+syngoidfx/fx	relatime	on
+syngoidfx/fx	redundant_metadata	all
+syngoidfx/fx	overlay	on
+syngoidfx/fx	encryption	off
+syngoidfx/fx	keylocation	none
+syngoidfx/fx	keyformat	none
+syngoidfx/fx	pbkdf2iters	0
+syngoidfx/fx	special_small_blocks	0
+syngoidfx/fx/a	type	filesystem
+syngoidfx/fx/a	creation	1792702845
+syngoidfx/fx/a	used	5303296
+syngoidfx/fx/a	available	120199168
+syngoidfx/fx/a	referenced	5275648
+syngoidfx/fx/a	compressratio	1.00
+syngoidfx/fx/a	mounted	yes
+syngoidfx/fx/a	quota	0
+syngoidfx/fx/a	reservation	0
+syngoidfx/fx/a	recordsize	131072
+syngoidfx/fx/a	mountpoint	/var/tmp/sgx.ZQT2g4/alt/syngoidfx/fx/a
+syngoidfx/fx/a	sharenfs	off
+syngoidfx/fx/a	checksum	on
+syngoidfx/fx/a	compression	off
+syngoidfx/fx/a	atime	off
+syngoidfx/fx/a	devices	on
+syngoidfx/fx/a	exec	on
+syngoidfx/fx/a	setuid	on
+syngoidfx/fx/a	readonly	off
+syngoidfx/fx/a	zoned	off
+syngoidfx/fx/a	snapdir	hidden
+syngoidfx/fx/a	aclmode	discard
+syngoidfx/fx/a	aclinherit	restricted
+syngoidfx/fx/a	createtxg	10
+syngoidfx/fx/a	canmount	on
+syngoidfx/fx/a	xattr	on
+syngoidfx/fx/a	copies	1
+syngoidfx/fx/a	version	5
+syngoidfx/fx/a	utf8only	off
+syngoidfx/fx/a	normalization	none
+syngoidfx/fx/a	casesensitivity	sensitive
+syngoidfx/fx/a	vscan	off
+syngoidfx/fx/a	nbmand	off
+syngoidfx/fx/a	sharesmb	off
+syngoidfx/fx/a	refquota	0
+syngoidfx/fx/a	refreservation	0
+syngoidfx/fx/a	guid	15342018597950055838
+syngoidfx/fx/a	primarycache	all
+syngoidfx/fx/a	secondarycache	all
+syngoidfx/fx/a	usedbysnapshots	27648
+syngoidfx/fx/a	usedbydataset	5275648
+syngoidfx/fx/a	usedbychildren	0
+syngoidfx/fx/a	usedbyrefreservation	0
+syngoidfx/fx/a	logbias	latency
+syngoidfx/fx/a	objsetid	267
+syngoidfx/fx/a	dedup	off
+syngoidfx/fx/a	mlslabel	none
+syngoidfx/fx/a	sync	standard
+syngoidfx/fx/a	dnodesize	legacy
+syngoidfx/fx/a	refcompressratio	1.00
+syngoidfx/fx/a	written	14336
+syngoidfx/fx/a	logicalused	5273088
+syngoidfx/fx/a	logicalreferenced	5259264
+syngoidfx/fx/a	volmode	default
+syngoidfx/fx/a	filesystem_limit	none
+syngoidfx/fx/a	snapshot_limit	none
+syngoidfx/fx/a	filesystem_count	none
+syngoidfx/fx/a	snapshot_count	none
+syngoidfx/fx/a	snapdev	hidden
+syngoidfx/fx/a	acltype	off
+syngoidfx/fx/a	context	none
+syngoidfx/fx/a	fscontext	none
+syngoidfx/fx/a	defcontext	none
+syngoidfx/fx/a	rootcontext	none
+syngoidfx/fx/a	relatime	on
+syngoidfx/fx/a	redundant_metadata	all
+syngoidfx/fx/a	overlay	on
+syngoidfx/fx/a	encryption	off
+syngoidfx/fx/a	keylocation	none
+syngoidfx/fx/a	keyformat	none
+syngoidfx/fx/a	pbkdf2iters	0
+syngoidfx/fx/a	special_small_blocks	0
+syngoidfx/fx/a	snapshots_changed	1792702847
+syngoidfx/fx/a@s1	type	snapshot
+syngoidfx/fx/a@s1	creation	1792702845
+syngoidfx/fx/a@s1	used	13312
+syngoidfx/fx/a@s1	referenced	4224000
+syngoidfx/fx/a@s1	compressratio	1.00
+syngoidfx/fx/a@s1	devices	on
+syngoidfx/fx/a@s1	exec	on
+syngoidfx/fx/a@s1	setuid	on
+syngoidfx/fx/a@s1	createtxg	12
+syngoidfx/fx/a@s1	xattr	on
+syngoidfx/fx/a@s1	version	5
+syngoidfx/fx/a@s1	utf8only	off
+syngoidfx/fx/a@s1	normalization	none
+syngoidfx/fx/a@s1	casesensitivity	sensitive
+syngoidfx/fx/a@s1	nbmand	off
+syngoidfx/fx/a@s1	guid	1595989671842712067
+syngoidfx/fx/a@s1	primarycache	all
+syngoidfx/fx/a@s1	secondarycache	all
+syngoidfx/fx/a@s1	defer_destroy	off
+syngoidfx/fx/a@s1	userrefs	0
+syngoidfx/fx/a@s1	objsetid	271
+syngoidfx/fx/a@s1	mlslabel	none
+syngoidfx/fx/a@s1	refcompressratio	1.00
+syngoidfx/fx/a@s1	written	4224000
+syngoidfx/fx/a@s1	clones	syngoidfx/fx/a/c
+syngoidfx/fx/a@s1	logicalreferenced	4209152
+syngoidfx/fx/a@s1	acltype	off
+syngoidfx/fx/a@s1	context	none
+syngoidfx/fx/a@s1	fscontext	none
+syngoidfx/fx/a@s1	defcontext	none
+syngoidfx/fx/a@s1	rootcontext	none
+syngoidfx/fx/a@s1	encryption	off
+syngoidfx/fx/a@s2	type	snapshot
+syngoidfx/fx/a@s2	creation	1792702847
+syngoidfx/fx/a@s2	used	0
+syngoidfx/fx/a@s2	referenced	5275648
+syngoidfx/fx/a@s2	compressratio	1.00
+syngoidfx/fx/a@s2	devices	on
+syngoidfx/fx/a@s2	exec	on
+syngoidfx/fx/a@s2	setuid	on
+syngoidfx/fx/a@s2	createtxg	13
+syngoidfx/fx/a@s2	xattr	on
+syngoidfx/fx/a@s2	version	5
+syngoidfx/fx/a@s2	utf8only	off
+syngoidfx/fx/a@s2	normalization	none
+syngoidfx/fx/a@s2	casesensitivity	sensitive
+syngoidfx/fx/a@s2	nbmand	off
+syngoidfx/fx/a@s2	guid	12246218892794968563
+syngoidfx/fx/a@s2	primarycache	all
+syngoidfx/fx/a@s2	secondarycache	all
+syngoidfx/fx/a@s2	defer_destroy	off
+syngoidfx/fx/a@s2	userrefs	0
+syngoidfx/fx/a@s2	objsetid	76
+syngoidfx/fx/a@s2	mlslabel	none
+syngoidfx/fx/a@s2	refcompressratio	1.00
+syngoidfx/fx/a@s2	written	1064960
+syngoidfx/fx/a@s2	logicalreferenced	5259264
+syngoidfx/fx/a@s2	acltype	off
+syngoidfx/fx/a@s2	context	none
+syngoidfx/fx/a@s2	fscontext	none
+syngoidfx/fx/a@s2	defcontext	none
+syngoidfx/fx/a@s2	rootcontext	none
+syngoidfx/fx/a@s2	encryption	off
+syngoidfx/fx/a@s3	type	snapshot
+syngoidfx/fx/a@s3	creation	1792702847
+syngoidfx/fx/a@s3	used	0
+syngoidfx/fx/a@s3	referenced	5275648
+syngoidfx/fx/a@s3	compressratio	1.00
+syngoidfx/fx/a@s3	devices	on
+syngoidfx/fx/a@s3	exec	on
+syngoidfx/fx/a@s3	setuid	on
+syngoidfx/fx/a@s3	createtxg	14
+syngoidfx/fx/a@s3	xattr	on
+syngoidfx/fx/a@s3	version	5
+syngoidfx/fx/a@s3	utf8only	off
+syngoidfx/fx/a@s3	normalization	none
+syngoidfx/fx/a@s3	casesensitivity	sensitive
+syngoidfx/fx/a@s3	nbmand	off
+syngoidfx/fx/a@s3	guid	1522084602697834839
+syngoidfx/fx/a@s3	primarycache	all
+syngoidfx/fx/a@s3	secondarycache	all
+syngoidfx/fx/a@s3	defer_destroy	off
+syngoidfx/fx/a@s3	userrefs	0
+syngoidfx/fx/a@s3	objsetid	274
+syngoidfx/fx/a@s3	mlslabel	none
+syngoidfx/fx/a@s3	refcompressratio	1.00
+syngoidfx/fx/a@s3	written	0
+syngoidfx/fx/a@s3	logicalreferenced	5259264
+syngoidfx/fx/a@s3	acltype	off
+syngoidfx/fx/a@s3	context	none
+syngoidfx/fx/a@s3	fscontext	none
+syngoidfx/fx/a@s3	defcontext	none
+syngoidfx/fx/a@s3	rootcontext	none
+syngoidfx/fx/a@s3	encryption	off
+syngoidfx/fx/a#b1	type	bookmark
+syngoidfx/fx/a#b1	creation	1792702845
+syngoidfx/fx/a#b1	referenced	4224000
+syngoidfx/fx/a#b1	createtxg	12
+syngoidfx/fx/a#b1	guid	1595989671842712067
+syngoidfx/fx/a#b1	logicalreferenced	4209152
+syngoidfx/fx/a#b2	type	bookmark
+syngoidfx/fx/a#b2	creation	1792702847
+syngoidfx/fx/a#b2	referenced	5275648
+syngoidfx/fx/a#b2	createtxg	13
+syngoidfx/fx/a#b2	guid	12246218892794968563
+syngoidfx/fx/a#b2	logicalreferenced	5259264
+syngoidfx/fx/a/c	type	filesystem
+syngoidfx/fx/a/c	creation	1792702847
+syngoidfx/fx/a/c	used	0
+syngoidfx/fx/a/c	available	120199168
+syngoidfx/fx/a/c	referenced	4224000
+syngoidfx/fx/a/c	compressratio	1.00
+syngoidfx/fx/a/c	mounted	yes
+syngoidfx/fx/a/c	origin	syngoidfx/fx/a@s1
+syngoidfx/fx/a/c	quota	0
+syngoidfx/fx/a/c	reservation	0
+syngoidfx/fx/a/c	recordsize	131072
+syngoidfx/fx/a/c	mountpoint	/var/tmp/sgx.ZQT2g4/alt/syngoidfx/fx/a/c
+syngoidfx/fx/a/c	sharenfs	off
+syngoidfx/fx/a/c	checksum	on
+syngoidfx/fx/a/c	compression	off
+syngoidfx/fx/a/c	atime	off
+syngoidfx/fx/a/c	devices	on
+syngoidfx/fx/a/c	exec	on
+syngoidfx/fx/a/c	setuid	on
+syngoidfx/fx/a/c	readonly	off
+syngoidfx/fx/a/c	zoned	off
+syngoidfx/fx/a/c	snapdir	hidden
+syngoidfx/fx/a/c	aclmode	discard
+syngoidfx/fx/a/c	aclinherit	restricted
+syngoidfx/fx/a/c	createtxg	15
+syngoidfx/fx/a/c	canmount	on
+syngoidfx/fx/a/c	xattr	on
+syngoidfx/fx/a/c	copies	1
+syngoidfx/fx/a/c	version	5
+syngoidfx/fx/a/c	utf8only	off
+syngoidfx/fx/a/c	normalization	none
+syngoidfx/fx/a/c	casesensitivity	sensitive
+syngoidfx/fx/a/c	vscan	off
+syngoidfx/fx/a/c	nbmand	off
+syngoidfx/fx/a/c	sharesmb	off
+syngoidfx/fx/a/c	refquota	0
+syngoidfx/fx/a/c	refreservation	0
+syngoidfx/fx/a/c	guid	14428478883002771837
+syngoidfx/fx/a/c	primarycache	all
+syngoidfx/fx/a/c	secondarycache	all
+syngoidfx/fx/a/c	usedbysnapshots	0
+syngoidfx/fx/a/c	usedbydataset	0
+syngoidfx/fx/a/c	usedbychildren	0
+syngoidfx/fx/a/c	usedbyrefreservation	0
+syngoidfx/fx/a/c	logbias	latency
+syngoidfx/fx/a/c	objsetid	387
+syngoidfx/fx/a/c	dedup	off
+syngoidfx/fx/a/c	mlslabel	none
+syngoidfx/fx/a/c	sync	standard
+syngoidfx/fx/a/c	dnodesize	legacy
+syngoidfx/fx/a/c	refcompressratio	1.00
+syngoidfx/fx/a/c	written	0
+syngoidfx/fx/a/c	logicalused	0
+syngoidfx/fx/a/c	logicalreferenced	4209152
+syngoidfx/fx/a/c	volmode	default
+syngoidfx/fx/a/c	filesystem_limit	none
+syngoidfx/fx/a/c	snapshot_limit	none
+syngoidfx/fx/a/c	filesystem_count	none
+syngoidfx/fx/a/c	snapshot_count	none
+syngoidfx/fx/a/c	snapdev	hidden
+syngoidfx/fx/a/c	acltype	off
+syngoidfx/fx/a/c	context	none
+syngoidfx/fx/a/c	fscontext	none
+syngoidfx/fx/a/c	defcontext	none
+syngoidfx/fx/a/c	rootcontext	none
+syngoidfx/fx/a/c	relatime	on
+syngoidfx/fx/a/c	redundant_metadata	all
+syngoidfx/fx/a/c	overlay	on
+syngoidfx/fx/a/c	encryption	off
+syngoidfx/fx/a/c	keylocation	none
+syngoidfx/fx/a/c	keyformat	none
+syngoidfx/fx/a/c	pbkdf2iters	0
+syngoidfx/fx/a/c	special_small_blocks	0
+syngoidfx/fx/a/c	syncoid:sync	nas,db1
+syngoidfx/fx/my data	type	filesystem
+syngoidfx/fx/my data	creation	1792702847
+syngoidfx/fx/my data	used	24576
+syngoidfx/fx/my data	available	120199168
+syngoidfx/fx/my data	referenced	24576
+syngoidfx/fx/my data	compressratio	1.00
+syngoidfx/fx/my data	mounted	yes
+syngoidfx/fx/my data	quota	0
+syngoidfx/fx/my data	reservation	0
+syngoidfx/fx/my data	recordsize	131072
+syngoidfx/fx/my data	mountpoint	/var/tmp/sgx.ZQT2g4/alt/syngoidfx/fx/my data
+syngoidfx/fx/my data	sharenfs	off
+syngoidfx/fx/my data	checksum	on
+syngoidfx/fx/my data	compression	off
+syngoidfx/fx/my data	atime	off
+syngoidfx/fx/my data	devices	on
+syngoidfx/fx/my data	exec	on
+syngoidfx/fx/my data	setuid	on
+syngoidfx/fx/my data	readonly	off
+syngoidfx/fx/my data	zoned	off
+syngoidfx/fx/my data	snapdir	hidden
+syngoidfx/fx/my data	aclmode	discard
+syngoidfx/fx/my data	aclinherit	restricted
+syngoidfx/fx/my data	createtxg	23
+syngoidfx/fx/my data	canmount	on
+syngoidfx/fx/my data	xattr	on
+syngoidfx/fx/my data	copies	1
+syngoidfx/fx/my data	version	5
+syngoidfx/fx/my data	utf8only	off
+syngoidfx/fx/my data	normalization	none
+syngoidfx/fx/my data	casesensitivity	sensitive
+syngoidfx/fx/my data	vscan	off
+syngoidfx/fx/my data	nbmand	off
+syngoidfx/fx/my data	sharesmb	off
+syngoidfx/fx/my data	refquota	0
+syngoidfx/fx/my data	refreservation	0
+syngoidfx/fx/my data	guid	10588188261295468918
+syngoidfx/fx/my data	primarycache	all
+syngoidfx/fx/my data	secondarycache	all
+syngoidfx/fx/my data	usedbysnapshots	0
+syngoidfx/fx/my data	usedbydataset	24576
+syngoidfx/fx/my data	usedbychildren	0
+syngoidfx/fx/my data	usedbyrefreservation	0
+syngoidfx/fx/my data	logbias	latency
+syngoidfx/fx/my data	objsetid	90
+syngoidfx/fx/my data	dedup	off
+syngoidfx/fx/my data	mlslabel	none
+syngoidfx/fx/my data	sync	standard
+syngoidfx/fx/my data	dnodesize	legacy
+syngoidfx/fx/my data	refcompressratio	1.00
+syngoidfx/fx/my data	written	0
+syngoidfx/fx/my data	logicalused	12288
+syngoidfx/fx/my data	logicalreferenced	12288
+syngoidfx/fx/my data	volmode	default
+syngoidfx/fx/my data	filesystem_limit	none
+syngoidfx/fx/my data	snapshot_limit	none
+syngoidfx/fx/my data	filesystem_count	none
+syngoidfx/fx/my data	snapshot_count	none
+syngoidfx/fx/my data	snapdev	hidden
+syngoidfx/fx/my data	acltype	off
+syngoidfx/fx/my data	context	none
+syngoidfx/fx/my data	fscontext	none
+syngoidfx/fx/my data	defcontext	none
+syngoidfx/fx/my data	rootcontext	none
+syngoidfx/fx/my data	relatime	on
+syngoidfx/fx/my data	redundant_metadata	all
+syngoidfx/fx/my data	overlay	on
+syngoidfx/fx/my data	encryption	off
+syngoidfx/fx/my data	keylocation	none
+syngoidfx/fx/my data	keyformat	none
+syngoidfx/fx/my data	pbkdf2iters	0
+syngoidfx/fx/my data	special_small_blocks	0
+syngoidfx/fx/my data	snapshots_changed	1792702847
+syngoidfx/fx/my data@m1	type	snapshot
+syngoidfx/fx/my data@m1	creation	1792702847
+syngoidfx/fx/my data@m1	used	0
+syngoidfx/fx/my data@m1	referenced	24576
+syngoidfx/fx/my data@m1	compressratio	1.00
+syngoidfx/fx/my data@m1	devices	on
+syngoidfx/fx/my data@m1	exec	on
+syngoidfx/fx/my data@m1	setuid	on
+syngoidfx/fx/my data@m1	createtxg	24
+syngoidfx/fx/my data@m1	xattr	on
+syngoidfx/fx/my data@m1	version	5
+syngoidfx/fx/my data@m1	utf8only	off
+syngoidfx/fx/my data@m1	normalization	none
+syngoidfx/fx/my data@m1	casesensitivity	sensitive
+syngoidfx/fx/my data@m1	nbmand	off
+syngoidfx/fx/my data@m1	guid	3174898624924250388
+syngoidfx/fx/my data@m1	primarycache	all
+syngoidfx/fx/my data@m1	secondarycache	all
+syngoidfx/fx/my data@m1	defer_destroy	off
+syngoidfx/fx/my data@m1	userrefs	0
+syngoidfx/fx/my data@m1	objsetid	94
+syngoidfx/fx/my data@m1	mlslabel	none
+syngoidfx/fx/my data@m1	refcompressratio	1.00
+syngoidfx/fx/my data@m1	written	24576
+syngoidfx/fx/my data@m1	logicalreferenced	12288
+syngoidfx/fx/my data@m1	acltype	off
+syngoidfx/fx/my data@m1	context	none
+syngoidfx/fx/my data@m1	fscontext	none
+syngoidfx/fx/my data@m1	defcontext	none
+syngoidfx/fx/my data@m1	rootcontext	none
+syngoidfx/fx/my data@m1	encryption	off
+syngoidfx/fx/nosync	type	filesystem
+syngoidfx/fx/nosync	creation	1792702847
+syngoidfx/fx/nosync	used	24576
+syngoidfx/fx/nosync	available	120199168
+syngoidfx/fx/nosync	referenced	24576
+syngoidfx/fx/nosync	compressratio	1.00
+syngoidfx/fx/nosync	mounted	yes
+syngoidfx/fx/nosync	quota	0
+syngoidfx/fx/nosync	reservation	0
+syngoidfx/fx/nosync	recordsize	131072
+syngoidfx/fx/nosync	mountpoint	/var/tmp/sgx.ZQT2g4/alt/syngoidfx/fx/nosync
+syngoidfx/fx/nosync	sharenfs	off
+syngoidfx/fx/nosync	checksum	on
+syngoidfx/fx/nosync	compression	off
+syngoidfx/fx/nosync	atime	off
+syngoidfx/fx/nosync	devices	on
+syngoidfx/fx/nosync	exec	on
+syngoidfx/fx/nosync	setuid	on
+syngoidfx/fx/nosync	readonly	off
+syngoidfx/fx/nosync	zoned	off
+syngoidfx/fx/nosync	snapdir	hidden
+syngoidfx/fx/nosync	aclmode	discard
+syngoidfx/fx/nosync	aclinherit	restricted
+syngoidfx/fx/nosync	createtxg	21
+syngoidfx/fx/nosync	canmount	on
+syngoidfx/fx/nosync	xattr	on
+syngoidfx/fx/nosync	copies	1
+syngoidfx/fx/nosync	version	5
+syngoidfx/fx/nosync	utf8only	off
+syngoidfx/fx/nosync	normalization	none
+syngoidfx/fx/nosync	casesensitivity	sensitive
+syngoidfx/fx/nosync	vscan	off
+syngoidfx/fx/nosync	nbmand	off
+syngoidfx/fx/nosync	sharesmb	off
+syngoidfx/fx/nosync	refquota	0
+syngoidfx/fx/nosync	refreservation	0
+syngoidfx/fx/nosync	guid	1142591233946961770
+syngoidfx/fx/nosync	primarycache	all
+syngoidfx/fx/nosync	secondarycache	all
+syngoidfx/fx/nosync	usedbysnapshots	0
+syngoidfx/fx/nosync	usedbydataset	24576
+syngoidfx/fx/nosync	usedbychildren	0
+syngoidfx/fx/nosync	usedbyrefreservation	0
+syngoidfx/fx/nosync	logbias	latency
+syngoidfx/fx/nosync	objsetid	138
+syngoidfx/fx/nosync	dedup	off
+syngoidfx/fx/nosync	mlslabel	none
+syngoidfx/fx/nosync	sync	standard
+syngoidfx/fx/nosync	dnodesize	legacy
+syngoidfx/fx/nosync	refcompressratio	1.00
+syngoidfx/fx/nosync	written	24576
+syngoidfx/fx/nosync	logicalused	12288
+syngoidfx/fx/nosync	logicalreferenced	12288
+syngoidfx/fx/nosync	volmode	default
+syngoidfx/fx/nosync	filesystem_limit	none
+syngoidfx/fx/nosync	snapshot_limit	none
+syngoidfx/fx/nosync	filesystem_count	none
+syngoidfx/fx/nosync	snapshot_count	none
+syngoidfx/fx/nosync	snapdev	hidden
+syngoidfx/fx/nosync	acltype	off
+syngoidfx/fx/nosync	context	none
+syngoidfx/fx/nosync	fscontext	none
+syngoidfx/fx/nosync	defcontext	none
+syngoidfx/fx/nosync	rootcontext	none
+syngoidfx/fx/nosync	relatime	on
+syngoidfx/fx/nosync	redundant_metadata	all
+syngoidfx/fx/nosync	overlay	on
+syngoidfx/fx/nosync	encryption	off
+syngoidfx/fx/nosync	keylocation	none
+syngoidfx/fx/nosync	keyformat	none
+syngoidfx/fx/nosync	pbkdf2iters	0
+syngoidfx/fx/nosync	special_small_blocks	0
+syngoidfx/fx/nosync	syncoid:sync	false
+syngoidfx/fx/vol	type	volume
+syngoidfx/fx/vol	creation	1792702847
+syngoidfx/fx/vol	used	12288
+syngoidfx/fx/vol	available	120199168
+syngoidfx/fx/vol	referenced	12288
+syngoidfx/fx/vol	compressratio	1.00
+syngoidfx/fx/vol	reservation	0
+syngoidfx/fx/vol	volsize	8388608
+syngoidfx/fx/vol	volblocksize	16384
+syngoidfx/fx/vol	checksum	on
+syngoidfx/fx/vol	compression	off
+syngoidfx/fx/vol	readonly	off
+syngoidfx/fx/vol	createtxg	19
+syngoidfx/fx/vol	copies	1
+syngoidfx/fx/vol	refreservation	0
+syngoidfx/fx/vol	guid	3886919015883859101
+syngoidfx/fx/vol	primarycache	all
+syngoidfx/fx/vol	secondarycache	all
+syngoidfx/fx/vol	usedbysnapshots	0
+syngoidfx/fx/vol	usedbydataset	12288
+syngoidfx/fx/vol	usedbychildren	0
+syngoidfx/fx/vol	usedbyrefreservation	0
+syngoidfx/fx/vol	logbias	latency
+syngoidfx/fx/vol	objsetid	83
+syngoidfx/fx/vol	dedup	off
+syngoidfx/fx/vol	mlslabel	none
+syngoidfx/fx/vol	sync	standard
+syngoidfx/fx/vol	refcompressratio	1.00
+syngoidfx/fx/vol	written	0
+syngoidfx/fx/vol	logicalused	6144
+syngoidfx/fx/vol	logicalreferenced	6144
+syngoidfx/fx/vol	volmode	default
+syngoidfx/fx/vol	snapshot_limit	none
+syngoidfx/fx/vol	snapshot_count	none
+syngoidfx/fx/vol	snapdev	hidden
+syngoidfx/fx/vol	context	none
+syngoidfx/fx/vol	fscontext	none
+syngoidfx/fx/vol	defcontext	none
+syngoidfx/fx/vol	rootcontext	none
+syngoidfx/fx/vol	redundant_metadata	all
+syngoidfx/fx/vol	encryption	off
+syngoidfx/fx/vol	keylocation	none
+syngoidfx/fx/vol	keyformat	none
+syngoidfx/fx/vol	pbkdf2iters	0
+syngoidfx/fx/vol	snapshots_changed	1792702847
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	type	snapshot
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	creation	1792702847
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	used	0
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	referenced	12288
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	compressratio	1.00
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	volsize	8388608
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	createtxg	20
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	guid	4676906533368569073
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	primarycache	all
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	secondarycache	all
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	defer_destroy	off
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	userrefs	0
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	objsetid	395
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	mlslabel	none
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	refcompressratio	1.00
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	written	12288
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	logicalreferenced	6144
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	context	none
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	fscontext	none
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	defcontext	none
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	rootcontext	none
+syngoidfx/fx/vol@syncoid_fxhost_2026-10-18:10:00:00-GMT02:00	encryption	off

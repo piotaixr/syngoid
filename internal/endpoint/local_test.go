@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -226,6 +229,75 @@ func TestLocalReceiveBusyCancelStopsFallback(t *testing.T) {
 	if len(fe.Calls) != 1 {
 		t.Errorf("calls after cancel = %q, want one", fe.Calls)
 	}
+}
+
+// TestReceiveBusyCaptured replays the ps output captured by
+// scripts/ci/capture-fixtures.sh (testdata/<os>/ps_*.txt) while a process
+// showed "/bin/sh .../b/zfs receive -s <218-character target>". A capture
+// with a .stderr file failed with exit status 1 (illumos ps has no -w).
+// Each row starts at one ps form; the forms before it fail.
+func TestReceiveBusyCaptured(t *testing.T) {
+	target := "syngoidfx/busy"
+	for c := 1; c <= 6; c++ {
+		target += fmt.Sprintf("/component-%d-of-a-long-target-name", c)
+	}
+	forms := []struct{ argv, file string }{
+		{"ps -wwAo args=", "ps_ww.txt"},
+		{"ps -Ao args=", "ps_A.txt"},
+		{"ps -eo args", "ps_e.txt"},
+	}
+	// want[i] is the verdict when the first form tried is forms[i].
+	tests := []struct {
+		os   string
+		want [3]bool
+	}{
+		{"linux", [3]bool{true, true, true}},
+		// FreeBSD 15.1 ps -A printed the whole line to a non-terminal even
+		// without -ww; ps -e there means "show the environment", not "every
+		// process", so the receive is not listed at all.
+		{"freebsd", [3]bool{true, true, false}},
+		// Known limitation (spec §14 item 4): -ww fails, and -A and -e keep
+		// only the first 80 bytes of the arguments, which cuts the target
+		// to "syngoidfx/busy/component-1-of-a-lo".
+		{"illumos", [3]bool{false, false, false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.os, func(t *testing.T) {
+			for start := range forms {
+				resp := map[string]zfstest.Response{}
+				for i, f := range forms {
+					resp[f.argv] = capturedPs(t, tt.os, f.file)
+					if i < start {
+						resp[f.argv] = zfstest.Response{Stderr: "forced failure\n", Exit: 1}
+					}
+				}
+				fe := &zfstest.FakeExec{Responses: resp}
+				got, err := newLocal(fe).ReceiveBusy(context.Background(), []string{target, "syngoidfx/busy"})
+				if err != nil {
+					t.Fatalf("from %s: %v", forms[start].argv, err)
+				}
+				want := map[string]bool{target: tt.want[start], "syngoidfx/busy": false}
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("from %s: ReceiveBusy = %v, want %v", forms[start].argv, got, want)
+				}
+			}
+		})
+	}
+}
+
+// capturedPs returns the captured result of one ps form: its stdout, or exit
+// status 1 with its stderr when the capture failed.
+func capturedPs(t *testing.T, osName, file string) zfstest.Response {
+	t.Helper()
+	dir := filepath.Join("testdata", osName)
+	if stderr, err := os.ReadFile(filepath.Join(dir, file+".stderr")); err == nil {
+		return zfstest.Response{Stderr: string(stderr), Exit: 1}
+	}
+	stdout, err := os.ReadFile(filepath.Join(dir, file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return zfstest.Response{Stdout: string(stdout)}
 }
 
 func payload(n int) []byte {

@@ -1,0 +1,2 @@
+SunOS omnios 5.11 omnios-r151058-516f7694c9 i86pc i386 i86pc
+The following filesystem versions are supported:

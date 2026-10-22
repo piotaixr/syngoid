@@ -1,0 +1,7 @@
+syngoidfx	filesystem	-	5647872	-	-
+syngoidfx/fx	filesystem	-	5391360	-	-
+syngoidfx/fx/a	filesystem	-	5303296	-	-
+syngoidfx/fx/a/c	filesystem	syngoidfx/fx/a@s1	0	-	nas,db1
+syngoidfx/fx/my data	filesystem	-	24576	-	-
+syngoidfx/fx/nosync	filesystem	-	24576	-	false
+syngoidfx/fx/vol	volume	-	12288	-	-

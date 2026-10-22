@@ -1,0 +1,52 @@
+sched
+kcfpoold
+zpool-rpool
+/sbin/init
+pageout
+fsflush
+/sbin/dlmgmtd
+/lib/svc/bin/svc.startd
+/lib/svc/bin/svc.configd
+/usr/lib/hal/hald-addon-network-discovery
+/lib/inet/netcfgd
+/lib/inet/ipmgmtd
+/usr/lib/hal/hald-addon-storage
+/usr/lib/power/powerd
+/lib/inet/in.mpathd
+devfsadmd
+hald-runner
+/usr/libexec/amd64/sshd-session -R
+/usr/lib/sysevent/syseventd
+/usr/lib/dbus-daemon --system
+/usr/lib/picl/picld
+sh
+/usr/lib/rcm/rcm_daemon
+/usr/lib/hal/hald --daemon=yes
+/usr/lib/zones/zonestatd
+/usr/lib/utmpd
+/usr/lib/fm/fmd/fmd
+/bin/sh /var/tmp/sgx.1n6705/b/zfs receive -s syngoidfx/busy/component-1-of-a-lo
+/usr/lib/hal/hald-addon-cpufreq
+/usr/lib/saf/sac -t 300
+/usr/lib/hal/hald-addon-acpi
+/usr/lib/saf/ttymon
+/usr/lib/pfexecd
+/usr/sbin/rpcbind
+/usr/lib/saf/ttymon -g -d /dev/console -l console -m ldterm,ttcompat -h -p omni
+/usr/perl5/bin/perl /usr/lib/intrd
+/usr/lib/autofs/automountd
+/usr/lib/autofs/automountd
+/usr/sbin/cron
+/usr/sbin/sshd
+/usr/lib/inet/inetd start
+ps -Ao args=
+/usr/sbin/rsyslogd
+zpool-syngoidfx
+/usr/sbin/nscd
+/sbin/dhcpagent
+sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-ou
+/usr/lib/hal/hald-addon-storage
+/usr/sbin/in.routed
+/usr/libexec/amd64/sshd-session -R
+/usr/sbin/chronyd
+/usr/sbin/chronyd
