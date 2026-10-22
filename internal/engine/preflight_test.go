@@ -280,13 +280,48 @@ func TestPreflightMissingFullAndLabels(t *testing.T) {
 	r.Render(&buf, true)
 	out := buf.String()
 	for _, want := range []string{
-		"  target backup/data: create, mount, receive, destroy\n",
-		"  [backup@nas]  zfs allow -u backup create,mount,receive,destroy backup\n",
-		"Full minimal grants:\n  [source]  zfs allow -u backup send,snapshot,mount,destroy,hold tank/data\n  [backup@nas]  zfs allow",
+		"  target backup@nas:backup/data: create, mount, receive, destroy\n",
+		"  [nas]  zfs allow -u backup create,mount,receive,destroy backup\n",
+		"Full minimal grants:\n  [source]  zfs allow -u backup send,snapshot,mount,destroy,hold tank/data\n  [nas]  zfs allow",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
+	}
+}
+
+func TestPreflightRenderRemoteLabels(t *testing.T) {
+	e := newPfEnv()
+	e.src.LabelValue, e.dst.LabelValue = "backup@db1", "backup@nas"
+	e.o.Target.Dataset = "tank/backups"
+	e.states = []DatasetState{{Source: "tank/data", Target: "tank/backups", TargetExists: true}}
+	e.tw.Create("tank", "")
+	e.tw.Create("tank/backups", "")
+	e.src.Faults.Allow = map[string]string{"tank/data": allowFor("tank/data", "backup", "send,mount,hold")}
+	e.dst.Faults.Allow = map[string]string{"tank/backups": allowFor("tank/backups", "backup", "create,mount,destroy")}
+	r := e.run(t, e.src, e.dst)
+	var buf bytes.Buffer
+	r.Render(&buf, false)
+	want := `CRITICAL ERROR: missing ZFS permissions
+  source backup@db1:tank/data: snapshot, destroy
+  target backup@nas:tank/backups: receive
+Grant them (as root) with:
+  [db1]  zfs allow -u backup snapshot,destroy,mount tank/data
+  [nas]  zfs allow -u backup receive,create,mount tank/backups
+Alternatively, run with --sudo (requires a sudoers rule for zfs).
+`
+	if got := buf.String(); got != want {
+		t.Errorf("Render(false) =\n%s\nwant\n%s", got, want)
+	}
+
+	// A remote sudo failure is tagged with the host as well.
+	r.Sides[Source].SudoErr = "sudo: a password is required"
+	r.Sides[Source].Missing = nil
+	r.Sides[Target].Missing = nil
+	buf.Reset()
+	r.Render(&buf, false)
+	if want := "  [db1]  sudo -n zfs failed: sudo: a password is required\n"; !strings.Contains(buf.String(), want) {
+		t.Errorf("missing %q in\n%s", want, buf.String())
 	}
 }
 

@@ -150,17 +150,6 @@ func TestMainSudoFlagsReachNewLocal(t *testing.T) {
 	}
 }
 
-func TestMainRemoteNotYet(t *testing.T) {
-	se := newSyncEnv(t, endpoint.HostInfo{})
-	if got := se.run("sync", "nas:tank/a", "tank/b"); got != 2 {
-		t.Fatalf("exit code = %d, want 2", got)
-	}
-	want := "CRITICAL ERROR: remote endpoints are not supported yet (milestone 2)\n"
-	if se.stderr.String() != want {
-		t.Errorf("stderr = %q, want %q", se.stderr, want)
-	}
-}
-
 func TestMainFetchNotYet(t *testing.T) {
 	se := newSyncEnv(t, endpoint.HostInfo{})
 	if got := se.run("fetch"); got != 2 {

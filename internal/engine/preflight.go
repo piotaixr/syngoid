@@ -27,6 +27,9 @@ type DatasetMissing struct {
 type SideReport struct {
 	Side        Side
 	Label, User string
+	// Remote means the side is another host and Label is its endpoint
+	// label, `user@host` or `host`; otherwise Label is the side's name.
+	Remote bool
 	// Root means the user is uid 0 and nothing is checked; Sudo means zfs
 	// runs through sudo and delegations are not checked.
 	Root, Sudo bool
@@ -119,6 +122,8 @@ func Preflight(ctx context.Context, src, dst endpoint.Endpoint, o *cli.Options, 
 		sr := SideReport{Side: side, Label: s.ep.Label(), User: s.info.User, Root: s.info.UID == 0, Sudo: s.sudo && s.info.UID != 0}
 		if sr.Label == "" {
 			sr.Label = side.String()
+		} else {
+			sr.Remote = true
 		}
 		rep.Sides[i] = sr
 		if sr.Root {
@@ -318,6 +323,27 @@ func (s SideReport) withCompanions() []perms.Requirement {
 	return out
 }
 
+// tag is how Render names the side in `[...]` lines: the host of a remote
+// side, the side's name for a local one.
+func (s SideReport) tag() string {
+	if !s.Remote {
+		return s.Label
+	}
+	if i := strings.LastIndexByte(s.Label, '@'); i >= 0 {
+		return s.Label[i+1:]
+	}
+	return s.Label
+}
+
+// shown is how Render names a dataset of the side: `label:dataset` for a
+// remote side.
+func (s SideReport) shown(dataset string) string {
+	if !s.Remote {
+		return dataset
+	}
+	return s.Label + ":" + dataset
+}
+
 // Render writes the failure report with ready-to-paste grant commands; it
 // writes nothing for a clean report unless full is set, in which case it
 // also lists the complete minimal grants of every delegation-checked side.
@@ -332,12 +358,12 @@ func (r PreflightReport) Render(w io.Writer, full bool) {
 				for i, m := range dm.Missing {
 					names[i] = m.String()
 				}
-				fmt.Fprintf(&b, "  %s %s: %s\n", s.Side, dm.Dataset, strings.Join(names, ", "))
+				fmt.Fprintf(&b, "  %s %s: %s\n", s.Side, s.shown(dm.Dataset), strings.Join(names, ", "))
 			}
 		}
 		for _, s := range r.Sides {
 			if s.SudoErr != "" {
-				fmt.Fprintf(&b, "  [%s]  sudo -n zfs failed: %s\n", s.Label, s.SudoErr)
+				fmt.Fprintf(&b, "  [%s]  sudo -n zfs failed: %s\n", s.tag(), s.SudoErr)
 			}
 		}
 		granted := false
@@ -349,7 +375,7 @@ func (r PreflightReport) Render(w io.Writer, full bool) {
 				fmt.Fprintln(&b, "Grant them (as root) with:")
 				granted = true
 			}
-			fmt.Fprintf(&b, "  [%s]  %s\n", s.Label, perms.GrantCommand(s.User, s.GrantDataset, s.withCompanions()))
+			fmt.Fprintf(&b, "  [%s]  %s\n", s.tag(), perms.GrantCommand(s.User, s.GrantDataset, s.withCompanions()))
 		}
 		if granted {
 			fmt.Fprintln(&b, "Alternatively, run with --sudo (requires a sudoers rule for zfs).")
@@ -367,6 +393,6 @@ func (r PreflightReport) Render(w io.Writer, full bool) {
 			fmt.Fprintln(&b, "Full minimal grants:")
 			header = true
 		}
-		fmt.Fprintf(&b, "  [%s]  %s\n", s.Label, perms.GrantCommand(s.User, s.GrantDataset, s.Grant))
+		fmt.Fprintf(&b, "  [%s]  %s\n", s.tag(), perms.GrantCommand(s.User, s.GrantDataset, s.Grant))
 	}
 }

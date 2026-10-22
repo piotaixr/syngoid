@@ -36,6 +36,10 @@ type Env struct {
 	// LoggerReady, when non-nil, is called with Main's logger before the
 	// first NewLocal call so commands can be traced.
 	LoggerReady func(*slog.Logger)
+	// NewConnector returns the Connector for remote sides. It is called once
+	// per run, and only when a side is remote. It may be nil, meaning remote
+	// endpoints are not configured.
+	NewConnector func(o *cli.Options, log *slog.Logger) (Connector, error)
 	// PoolExists reports whether a local ZFS pool of that name exists. It
 	// may be nil, meaning none does.
 	PoolExists func(string) bool
@@ -101,7 +105,7 @@ func (p *prompter) ask(question string) bool {
 	return false
 }
 
-// runSync implements the sync and permissions commands for local endpoints.
+// runSync implements the sync and permissions commands.
 func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	o := parsed.Options
 	log := logx.New(logx.Config{Stdout: env.Stdout, Stderr: env.Stderr, Quiet: o.Quiet, Debug: o.Debug})
@@ -110,9 +114,6 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	}
 	for _, w := range parsed.Warnings {
 		log.Warn(w)
-	}
-	if o.Source.IsRemote() || o.Target.IsRemote() {
-		return criticalf(env, "remote endpoints are not supported yet (milestone 2)")
 	}
 	if parsed.Command == cli.CmdSync && o.Confirm && !env.StdinIsTTY {
 		return criticalf(env, "--confirm requires an interactive terminal")
@@ -123,7 +124,12 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	}
 	syncSnap := naming.SyncSnapName(o.Identifier, host, env.Now())
 
-	src, dst := env.NewLocal(o.SourceSudo), env.NewLocal(o.TargetSudo)
+	ends, err := openSides(ctx, env, o, log)
+	if err != nil {
+		return criticalf(env, "%v", err)
+	}
+	defer ends.close()
+	src, dst := ends.src, ends.dst
 	states, err := engine.Gather(ctx, src, dst, o, syncSnap)
 	if err != nil {
 		return criticalf(env, "%v", err)
@@ -188,12 +194,13 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	if o.Quiet {
 		mode = stream.ProgressNone
 	}
+	codec := streamCodec(o)
 	ex := &engine.Executor{
 		Src: src, Dst: dst, Opts: o, PlanOpts: po, Log: log,
 		Progress:          stream.NewRenderer(mode, env.Stderr, env.StderrIsTTY, log),
 		Confirm:           confirm,
-		SendCodec:         stream.None,
-		RecvCodec:         stream.None,
+		SendCodec:         codec,
+		RecvCodec:         codec,
 		UnprivLinuxTarget: dstInfo.OS == "linux" && dstInfo.UID != 0 && !o.TargetSudo,
 		SyncSnap:          syncSnap,
 	}
