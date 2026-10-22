@@ -710,10 +710,32 @@ FreeBSD port, moving data streams to separate SSH sessions.
    Loopback with file-backed pools is not a 10 GbE link, so neither number says anything about a real
    bandwidth-delay product. Decision: `MaxStreamWindow` stays 16 MiB (the rule for changing it: 64 MiB beating
    16 MiB by more than 20 % on both measurements; in-process it is slower, and the loopback number is pending).
-3. `zfs allow` output format differences across Linux/FreeBSD/illumos — captured as fixtures before writing the
-   parser.
-4. `ps` argument listing across platforms — captured as fixtures (with a 218-character receive target).
-   `ReceiveBusy` tries `ps -wwAo args=` (without a tty FreeBSD ps cuts lines at 79 columns unless `-ww`), then
-   `ps -Ao args=`, then `ps -eo args` (header dropped). *Known limitation:* illumos ps has no `-w` and keeps only
-   the first 80 bytes of the arguments, so a `zfs receive` into a long target name is not seen there; a second
-   receive then fails critically instead of being skipped as busy.
+3. `zfs` and `zfs allow` output across Linux/FreeBSD/illumos — *resolved by captured fixtures*
+   (`scripts/ci/capture-fixtures.sh`, workflow run 39853662415, files in `internal/{zfs,perms,endpoint}/testdata/<os>`):
+   Ubuntu with OpenZFS 2.2.2 userland (2.3.4 module), FreeBSD 15.1 with OpenZFS 2.4.2, OmniOS r151058 (illumos ZFS,
+   which has no `zfs version`). `zfs allow`, `zfs list -Hp`, `zfs get -Hp` and the "dataset does not exist" message
+   have the same format on all three (the `zfs allow` output is byte-identical), so one parser serves all. The
+   differences:
+   - illumos `zfs` stops parsing options at the first operand: the typed listings with `-r` after the property list
+     failed (`cannot open '-r': missing '@' delimiter`). Every query now puts its options first (the §8.3 order);
+     that argv has not run on illumos yet.
+   - `zfs send -nvP`: illumos prints the `-i` source as a short name and gives no `size` line for `-t` (the last
+     line is the `full` line). The estimate is read from the last field of the last line on all three.
+   - `zfs receive -s -F` of a full stream onto a partially received filesystem: OpenZFS refuses (`contains
+     partially-complete state`, classified `ErrPartialState`); illumos drops the partial state and receives.
+   - Resuming onto an existing filesystem: OpenZFS says `Resuming recv on existing destination`, illumos `invalid
+     backup stream`; neither is classified.
+   - `cannot restore to X: destination already exists` (`DestinationExistsError`) came from none of the three
+     captured cases (resume onto an existing filesystem, full stream with and without `-F` onto a filesystem with
+     snapshots). It is what libzfs prints when the kernel refuses a receive because the target snapshot name already
+     exists; that case (`stderr_dest_exists_snap.txt`) and a real "resume source gone" message are added to the
+     capture and need another run. The first run's resume-source-gone send succeeded because `zfs send -t` found
+     the snapshot by guid in a received copy.
+4. `ps` argument listing across platforms — *captured* with a 218-character receive target. Linux (procps): all
+   three forms print the whole line. FreeBSD 15.1: `ps -wwAo args=` and also `ps -Ao args=` printed it whole (stdout
+   a file, no terminal); `ps -eo args` lists only the caller's processes that have a terminal (`-e` adds the
+   environment there), so it would miss every receive, but it is reached only when both `-A` forms fail. OmniOS: `-ww` is rejected
+   (`illegal option -- w`); `ps -Ao args=` and `ps -eo args` keep the first 80 bytes. `ReceiveBusy` keeps the
+   order `ps -wwAo args=`, `ps -Ao args=`, `ps -eo args` (header dropped). *Known limitation:* on illumos a
+   `zfs receive` into a long target name is not seen; a second receive then fails critically instead of being
+   skipped as busy.
