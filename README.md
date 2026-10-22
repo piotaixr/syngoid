@@ -151,9 +151,13 @@ with ZFS, as root, with `SYNGOID_IT=1`. They only touch two dedicated file-backe
 
 Prepare an Ubuntu host. The script installs ZFS, creates the pools `syngoid-src` and `syngoid-dst` from sparse files
 under `/var/tmp/syngoid-it`, adds the user `syngoid-it` (with a home and a shell), and installs syncoid 2.2.0 pinned by
-checksum. For the remote tests, which replicate over `ssh localhost`, it also starts `sshd`, creates root's ed25519 key
-(authorized for `root` and `syngoid-it`, `localhost` in root's `known_hosts`) and adds the sudoers rule
-`/etc/sudoers.d/syngoid-it` that lets `syngoid-it` run `zfs` through `sudo -n`:
+checksum. For the remote tests, which replicate over `ssh localhost`, it also creates root's ed25519 key (authorized
+for `syngoid-it`, `localhost` in root's `known_hosts`) and adds the sudoers rule `/etc/sudoers.d/syngoid-it` that lets
+`syngoid-it` run `zfs` through `sudo -n`. Those tests need an `sshd` on `localhost:22`. The script installs and starts
+one (`openssh-server`, enabled at boot and listening on every interface with the distribution's defaults, which allow
+password logins for every account) only under GitHub Actions or when you opt in with `SYNGOID_IT_SSHD=1`; otherwise it
+requires an `sshd` that already listens and stops with instructions. Opt in only on a throwaway machine, or firewall
+port 22:
 
 ```sh
 scripts/ci/setup-zfs.sh

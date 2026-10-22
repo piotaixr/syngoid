@@ -3,15 +3,22 @@
 # installs the ZFS tools, creates the file-backed pools syngoid-src and
 # syngoid-dst (1 GiB sparse files) and the unprivileged user syngoid-it used
 # by the delegation tests, and installs Perl syncoid 2.2.0 (/usr/local/bin/syncoid)
-# for the interoperability tests. For the remote tests it also starts sshd and
-# sets up key-based ssh from root to root@localhost and syngoid-it@localhost
-# (known_hosts included, no passphrase), and lets syngoid-it run zfs through
-# `sudo -n` (/etc/sudoers.d/syngoid-it). Idempotent. Re-executes itself through
-# sudo.
+# for the interoperability tests. For the remote tests it also sets up
+# key-based ssh from root to syngoid-it@localhost (known_hosts included, no
+# passphrase), and lets syngoid-it run zfs through `sudo -n`
+# (/etc/sudoers.d/syngoid-it).
+#
+# The remote tests need an sshd on localhost:22. This script installs and
+# starts one (openssh-server, enabled at boot, listening on every interface,
+# with the distribution's defaults, which allow password logins) only under
+# GitHub Actions or when SYNGOID_IT_SSHD=1 is set; on any other machine it
+# requires an sshd that already listens on localhost:22.
+# Idempotent. Re-executes itself through sudo.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-	exec sudo "$0" "$@"
+	# sudo resets the environment; pass the sshd opt-in through.
+	exec sudo env "GITHUB_ACTIONS=${GITHUB_ACTIONS:-}" "SYNGOID_IT_SSHD=${SYNGOID_IT_SSHD:-}" "$0" "$@"
 fi
 
 img_dir=/var/tmp/syngoid-it
@@ -71,23 +78,47 @@ fi
 usermod --password '*' "$it_user"
 install -d -m 0750 -o "$it_user" -g "$(id -gn "$it_user")" "$it_home"
 
-# sshd on localhost for the remote tests.
-if [ ! -x /usr/sbin/sshd ] || ! command -v ssh-keyscan >/dev/null 2>&1; then
-	apt-get install -y -q openssh-server openssh-client
-fi
-ssh-keygen -A
-mkdir -p /run/sshd
-if ! { systemctl start ssh || service ssh start; } >/dev/null 2>&1; then
-	/usr/sbin/sshd
-fi
-for _ in $(seq 20); do
-	if [ -n "$(ssh-keyscan -T 2 localhost 2>/dev/null)" ]; then
-		break
+# sshd on localhost for the remote tests. Installing and starting a server is
+# only done where that is expected: CI, or an explicit opt-in.
+if [ "${GITHUB_ACTIONS:-}" = true ] || [ "${SYNGOID_IT_SSHD:-}" = 1 ]; then
+	if [ ! -x /usr/sbin/sshd ] || ! command -v ssh-keyscan >/dev/null 2>&1; then
+		apt-get install -y -q openssh-server openssh-client
 	fi
-	sleep 1
-done
+	ssh-keygen -A
+	mkdir -p /run/sshd
+	if ! { systemctl start ssh || service ssh start; } >/dev/null 2>&1; then
+		/usr/sbin/sshd
+	fi
+fi
+sshd_up=
+if command -v ssh-keyscan >/dev/null 2>&1; then
+	for _ in $(seq 20); do
+		if [ -n "$(ssh-keyscan -T 2 localhost 2>/dev/null)" ]; then
+			sshd_up=1
+			break
+		fi
+		sleep 1
+	done
+fi
+if [ -z "$sshd_up" ]; then
+	cat >&2 <<'MSG'
+error: the remote integration tests need an ssh server on localhost:22 (and the
+ssh client tools), and none answers.
 
-# Root's key logs in as root and as syngoid-it; the initiator runs as root.
+Either start an sshd yourself and rerun this script, or let the script install
+and start one by running it with SYNGOID_IT_SSHD=1:
+
+    SYNGOID_IT_SSHD=1 scripts/ci/setup-zfs.sh
+
+That installs openssh-server, enables it at boot and starts it on every network
+interface with the distribution's default configuration, which allows password
+logins for every account. Use it only on a throwaway machine, or firewall port
+22. Under GitHub Actions the script does this on its own.
+MSG
+	exit 1
+fi
+
+# Root's key logs in as syngoid-it; the initiator runs as root.
 install -d -m 0700 /root/.ssh
 if [ ! -f /root/.ssh/id_ed25519 ]; then
 	ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519
@@ -104,7 +135,6 @@ authorize() { # authorize FILE OWNER: append the public key unless present
 	chmod 0600 "$file"
 }
 authorize "$it_home/.ssh/authorized_keys" "$it_user"
-authorize /root/.ssh/authorized_keys root
 touch /root/.ssh/known_hosts
 if ! ssh-keygen -F localhost -f /root/.ssh/known_hosts >/dev/null; then
 	ssh-keyscan -H localhost >>/root/.ssh/known_hosts
@@ -119,14 +149,15 @@ if [ "$zfs_real" != "$zfs_bin" ]; then
 fi
 sudoers_tmp=$(mktemp)
 echo "$sudo_rule" >"$sudoers_tmp"
-visudo -cf "$sudoers_tmp"
-install -m 0440 -o root -g root "$sudoers_tmp" "/etc/sudoers.d/$it_user"
+if ! visudo -cf "$sudoers_tmp" ||
+	! install -m 0440 -o root -g root "$sudoers_tmp" "/etc/sudoers.d/$it_user"; then
+	rm -f "$sudoers_tmp"
+	exit 1
+fi
 rm -f "$sudoers_tmp"
 
 # Fail here, with a clear message, rather than in every remote test.
-for target in "$it_user@localhost" root@localhost; do
-	ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" true
-done
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$it_user@localhost" true
 sudo -n -u "$it_user" -- sudo -n "$zfs_bin" version >/dev/null
 
 zfs version
