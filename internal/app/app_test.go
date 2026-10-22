@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -32,11 +33,9 @@ func TestMainVersion(t *testing.T) {
 	if got := Main(context.Background(), []string{"version"}, env); got != 0 {
 		t.Fatalf("exit code = %d, want 0", got)
 	}
-	out := stdout.String()
-	for _, want := range []string{"syngoid dev", "protocol 1"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("stdout %q does not contain %q", out, want)
-		}
+	re := regexp.MustCompile(`^syngoid dev \(commit unknown, build [0-9a-f]{12}\) protocol 1\n$`)
+	if out := stdout.String(); !re.MatchString(out) {
+		t.Errorf("stdout %q does not match %v", out, re)
 	}
 }
 

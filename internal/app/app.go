@@ -77,8 +77,8 @@ func runVersion(env Env) int {
 	if buildinfo.Dirty == "true" {
 		dirty = ", dirty"
 	}
-	_, _ = fmt.Fprintf(env.Stdout, "syngoid %s (commit %s%s) protocol %d\n",
-		buildinfo.Version, buildinfo.Commit, dirty, buildinfo.ProtocolVersion)
+	_, _ = fmt.Fprintf(env.Stdout, "syngoid %s (commit %s%s, build %.12s) protocol %d\n",
+		buildinfo.Version, buildinfo.Commit, dirty, buildinfo.BuildHash(), buildinfo.ProtocolVersion)
 	return 0
 }
 
