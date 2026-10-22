@@ -151,14 +151,15 @@ func (c *connector) push(ctx context.Context, pr ProbeResult) (string, error) {
 	// Hash the whole file up front: what the transport consumed could be
 	// short of it and still succeed.
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	size, err := io.Copy(h, f)
+	if err != nil {
 		return "", fmt.Errorf("%s: push: %w", c.label, err)
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("%s: push: %w", c.label, err)
 	}
 	c.log.Info(fmt.Sprintf("pushing syngoid agent to %s:%s/syngoid", c.label, pr.Dir), logx.KeyHost, c.label)
-	if _, err := c.t.Run(ctx, PushCommand(pr.Dir), f); err != nil {
+	if _, err := c.t.Run(ctx, PushCommand(pr.Dir, size), f); err != nil {
 		return "", fmt.Errorf("%s: push %s: %w", c.label, path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

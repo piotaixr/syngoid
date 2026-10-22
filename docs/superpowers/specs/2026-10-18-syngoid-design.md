@@ -231,8 +231,9 @@ One `ssh host sh -c '<probe>' syngoid-probe '<remote-bin-dir>'` returning exactl
 `isainfo -k` (illumos; `-` elsewhere), `$HOME`, the absolute bin dir, and `yes`/`no` for whether `<dir>/syngoid` is
 executable. The bin dir is passed single-quoted with a literal leading `~/`; the probe expands it against `$HOME`
 itself and prints the result, which must be absolute. Push and serve use only that absolute, quoted path. The probe
-script is a single line, and the bin dir (the option value and the probed result) must be printable ASCII (no
-newline, NUL or control character): the login shell may be csh or fish, which do not take every POSIX-quoted string.
+script is a single line, and the bin dir (the option value and the probed result) must be printable ASCII other than
+`\` (no newline, NUL, control character or backslash): the login shell may be csh or fish, which do not take every
+POSIX-quoted string (fish reads `\\` and `\'` as escapes inside single quotes).
 
 Platform mapping: `Linux`→`linux`, `FreeBSD`→`freebsd`, `SunOS`→`illumos`, `Darwin`→`darwin`;
 `x86_64`/`amd64`/`i86pc`(+`isainfo -k`=`amd64`)→`amd64`, `aarch64`/`arm64`→`arm64`, `armv7l`→`arm` (GOARM=7),
@@ -258,8 +259,11 @@ failure names `--bin-store=DIR` and `/usr/lib/syngoid/bin/<os>-<arch>/syngoid`.
 
 ### 5.4 Push
 
-`ssh host sh -c 'umask 077; mkdir -p "$1" && cat > "$1/.syngoid.tmp.$$" && chmod 700 "$1/.syngoid.tmp.$$" && mv -f "$1/.syngoid.tmp.$$" "$1/syngoid"' syngoid-push '<D>'`
-with the binary on stdin. `<D>` is the probe's absolute bin dir, single-quoted. The initiator logs
+`ssh host sh -c 'umask 077; T="$1/.syngoid.tmp.$$"; mkdir -p "$1" && cat > "$T" && n=$(wc -c < "$T") && [ $n -eq "$2" ] && chmod 700 "$T" && mv -f "$T" "$1/syngoid" || { rm -f "$T"; exit 1; }' syngoid-push '<D>' '<size>'`
+with the binary on stdin. `<D>` is the probe's absolute bin dir, single-quoted; `<size>` is the binary's byte count.
+A push cut short (cancelled, or a failed local read) ends `cat` with a plain EOF, so the size check keeps a
+truncated file from being installed; any failure removes the temporary file. `$n` stays unquoted because BSD `wc`
+pads its count with spaces. The initiator logs
 `INFO: [<host>] pushing syngoid agent to <host>:<D>/syngoid` and keeps the SHA-256 of the file it pushed.
 
 ### 5.5 Start and handshake

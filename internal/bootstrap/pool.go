@@ -136,7 +136,8 @@ func (p *Pool) master(ctx context.Context, user, host, dest string) (MasterTrans
 }
 
 // Close closes every session, then every master, then removes the control
-// directory. It is idempotent; the Pool is unusable afterwards.
+// directory. It waits for an Endpoint call in progress, whose connect holds
+// the Pool's lock. It is idempotent; the Pool is unusable afterwards.
 func (p *Pool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

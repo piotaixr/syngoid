@@ -4,6 +4,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/piotaixr/syngoid/internal/sshx"
@@ -20,8 +21,10 @@ const probeScript = `D=$1; case $D in "~/"*) D=$HOME/${D#"~/"};; esac; ` +
 	`if [ -x "$D/syngoid" ]; then echo yes; else echo no; fi`
 
 // pushScript atomically installs its stdin as $1/syngoid, mode 0700, in a
-// 0700 directory.
-const pushScript = `umask 077; mkdir -p "$1" && cat > "$1/.syngoid.tmp.$$" && chmod 700 "$1/.syngoid.tmp.$$" && mv -f "$1/.syngoid.tmp.$$" "$1/syngoid"`
+// 0700 directory, only when exactly $2 bytes arrived: a push cut short ends
+// cat with a plain EOF. On failure the temporary file is removed. The
+// unquoted $n drops the padding BSD wc prints.
+const pushScript = `umask 077; T="$1/.syngoid.tmp.$$"; mkdir -p "$1" && cat > "$T" && n=$(wc -c < "$T") && [ $n -eq "$2" ] && chmod 700 "$T" && mv -f "$T" "$1/syngoid" || { rm -f "$T"; exit 1; }`
 
 // ProbeCommand returns the remote command probing the platform and the bin
 // dir, which may start with "~/".
@@ -29,10 +32,10 @@ func ProbeCommand(dir string) string {
 	return sshx.ShellJoin("sh", "-c", probeScript, "syngoid-probe", dir)
 }
 
-// PushCommand returns the remote command installing its stdin as
-// <dir>/syngoid; dir is the probe's absolute Dir.
-func PushCommand(dir string) string {
-	return sshx.ShellJoin("sh", "-c", pushScript, "syngoid-push", dir)
+// PushCommand returns the remote command installing its stdin, size bytes,
+// as <dir>/syngoid; dir is the probe's absolute Dir.
+func PushCommand(dir string, size int64) string {
+	return sshx.ShellJoin("sh", "-c", pushScript, "syngoid-push", dir, strconv.FormatInt(size, 10))
 }
 
 // ServeCommand returns the remote command starting the agent in dir, the
@@ -81,16 +84,17 @@ func ParseProbe(out string) (ProbeResult, error) {
 }
 
 // checkRemoteDir rejects a remote bin dir that is empty or holds anything
-// but printable ASCII. The serve command runs in the remote login shell,
-// which may be csh or fish, where a quoted newline or control character
-// does not survive.
+// but printable ASCII, or that holds a backslash. The serve command runs in
+// the remote login shell, which may be csh or fish, where a quoted newline
+// or control character does not survive and fish reads \\ and \' as
+// escapes inside single quotes.
 func checkRemoteDir(dir string) error {
 	if dir == "" {
 		return fmt.Errorf("remote bin dir is empty")
 	}
 	for i := 0; i < len(dir); i++ {
-		if c := dir[i]; c < 0x20 || c > 0x7e {
-			return fmt.Errorf("invalid remote bin dir %q: only printable ASCII characters are allowed", dir)
+		if c := dir[i]; c < 0x20 || c > 0x7e || c == '\\' {
+			return fmt.Errorf("invalid remote bin dir %q: only printable ASCII characters other than \\ are allowed", dir)
 		}
 	}
 	return nil
