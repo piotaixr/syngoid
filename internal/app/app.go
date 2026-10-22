@@ -60,7 +60,7 @@ func Main(ctx context.Context, args []string, env Env) int {
 	case cli.CmdFetch:
 		return criticalf(env, "fetch is not supported yet (milestone 3)")
 	case cli.CmdServe:
-		return criticalf(env, "serve is not supported yet (milestone 2)")
+		return runServe(ctx, env)
 	case cli.CmdSync, cli.CmdPermissions:
 	}
 	return runSync(ctx, env, parsed)

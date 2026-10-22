@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/piotaixr/syngoid/internal/buildinfo"
 	"github.com/piotaixr/syngoid/internal/endpoint"
 	"github.com/piotaixr/syngoid/internal/endpoint/fake"
+	"github.com/piotaixr/syngoid/internal/rpc"
 	"github.com/piotaixr/syngoid/internal/zfs"
 )
 
@@ -159,15 +161,67 @@ func TestMainRemoteNotYet(t *testing.T) {
 	}
 }
 
-func TestMainFetchServeNotYet(t *testing.T) {
-	for cmd, milestone := range map[string]string{"fetch": "milestone 3", "serve": "milestone 2"} {
-		se := newSyncEnv(t, endpoint.HostInfo{})
-		if got := se.run(cmd); got != 2 {
-			t.Errorf("%s: exit code = %d, want 2", cmd, got)
+func TestMainFetchNotYet(t *testing.T) {
+	se := newSyncEnv(t, endpoint.HostInfo{})
+	if got := se.run("fetch"); got != 2 {
+		t.Errorf("exit code = %d, want 2", got)
+	}
+	if want := "not supported yet (milestone 3)"; !strings.Contains(se.stderr.String(), want) {
+		t.Errorf("stderr %q does not contain %q", se.stderr, want)
+	}
+}
+
+// duplex joins the initiator's ends of the two pipes into one connection.
+type duplex struct {
+	io.Reader
+	io.Writer
+	closers []io.Closer
+}
+
+func (d duplex) Close() error {
+	for _, c := range d.closers {
+		_ = c.Close()
+	}
+	return nil
+}
+
+func TestMainServeHandshake(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	se := newSyncEnv(t, endpoint.HostInfo{User: "backup"})
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	se.Stdin, se.Stdout = inR, outW
+
+	code := make(chan int, 1)
+	go func() { code <- Main(context.Background(), []string{"serve"}, se.Env) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	hello := rpc.Hello{Protocol: buildinfo.ProtocolVersion, Version: buildinfo.Version, BuildHash: buildinfo.BuildHash(), Sudo: true}
+	conn := duplex{Reader: outR, Writer: inW, closers: []io.Closer{inW, outR}}
+	r, reply, err := rpc.Handshake(ctx, conn, hello, "nas", nil)
+	if err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	if reply.User != "backup" {
+		t.Errorf("reply.User = %q, want backup", reply.User)
+	}
+	if err := r.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	select {
+	case got := <-code:
+		if got != 0 {
+			t.Errorf("exit code = %d, want 0", got)
 		}
-		if want := "not supported yet (" + milestone + ")"; !strings.Contains(se.stderr.String(), want) {
-			t.Errorf("%s: stderr %q does not contain %q", cmd, se.stderr, want)
-		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Main did not return after the remote closed")
+	}
+	if se.stderr.Len() != 0 || se.stdout.Len() != 0 {
+		t.Errorf("stdout %q, stderr %q, want both empty", se.stdout, se.stderr)
+	}
+	if want := []bool{true}; !slices.Equal(se.newLocalCalls, want) {
+		t.Errorf("NewLocal sudo args = %v, want %v", se.newLocalCalls, want)
 	}
 }
 
