@@ -35,7 +35,6 @@ func newTestMaster(t *testing.T, cfg Config, user, host string) *Master {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.stdin = strings.NewReader("")
 	m.closeWait = 2 * time.Second
 	m.killGrace = 200 * time.Millisecond
 	return m
@@ -50,7 +49,7 @@ func TestMasterArgv(t *testing.T) {
 		t.Errorf("Label = %q", got)
 	}
 	wantMaster := []string{
-		"ssh", "-F", "/c", "-o", "ControlPath=/d/cm-0", "-o", "ControlMaster=yes", "-o", "ControlPersist=60",
+		"ssh", "-F", "/c", "-o", "ControlPath=/d/cm-0", "-n", "-o", "ControlMaster=yes", "-o", "ControlPersist=60",
 		"-o", "Port=2222", "-T", "--", "backup@nas", "exit",
 	}
 	if got := m.masterArgv(); !slices.Equal(got, wantMaster) {
@@ -543,6 +542,45 @@ func TestStartErrorCarriesStderr(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("Start took %v", d)
+	}
+}
+
+func TestStartLeavesStdinAlone(t *testing.T) {
+	// `while read a b; do syngoid ...; done < jobs`: the master must not
+	// consume the rest of the caller's stdin.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	const jobs = "pool/a host:pool/a\npool/b host:pool/b\n"
+	if _, err := w.WriteString(jobs); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	saved := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = saved })
+
+	dir := t.TempDir()
+	got := filepath.Join(dir, "stdin")
+	argvFile := filepath.Join(dir, "argv")
+	shim := writeShim(t, `for a; do printf '%s\n' "$a"; done > `+argvFile+`; cat > `+got)
+	m, err := NewMaster(Config{SSH: shim}, "", "h", dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(got); err != nil || len(b) != 0 {
+		t.Errorf("master read %q from stdin (err %v), want nothing", b, err)
+	}
+	if rest, err := io.ReadAll(r); err != nil || string(rest) != jobs {
+		t.Errorf("stdin left = %q (err %v), want %q", rest, err, jobs)
+	}
+	if b, _ := os.ReadFile(argvFile); !slices.Contains(strings.Split(string(b), "\n"), "-n") {
+		t.Errorf("master argv lacks -n:\n%s", b)
 	}
 }
 
