@@ -12,6 +12,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -26,6 +27,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -748,4 +750,275 @@ func setClock(t *testing.T, tm time.Time) {
 	if err != nil {
 		t.Fatalf("setting the clock: %v: %s", err, out)
 	}
+}
+
+// remoteHost is the ssh host of the remote tests: the machine itself, which
+// setup-zfs.sh makes reachable by key as root and as itUser.
+const remoteHost = "localhost"
+
+// remoteLoc returns the endpoint who@localhost:ds.
+func remoteLoc(who, ds string) string {
+	return who + "@" + remoteHost + ":" + ds
+}
+
+// agentPath returns where syngoid pushes its agent for who@localhost: this
+// development build's directory, <home>/.cache/syngoid/dev-<first 8 hex of
+// the binary's SHA-256>/syngoid.
+func agentPath(t *testing.T, who string) string {
+	t.Helper()
+	u, err := user.Lookup(who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(u.HomeDir, ".cache", "syngoid", "dev-"+fileSHA256(t, binPath)[:8], "syngoid")
+}
+
+// forgetAgents removes everything syngoid pushed to who's home, so the next
+// run pushes again.
+func forgetAgents(t *testing.T, who string) {
+	t.Helper()
+	// <home>/.cache/syngoid/dev-<hash>/syngoid → <home>/.cache/syngoid
+	if err := os.RemoveAll(filepath.Dir(filepath.Dir(agentPath(t, who)))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// sshReady checks once that root can ssh to itUser@localhost without a
+// prompt, which every remote run needs (BatchMode, no TTY).
+var sshReady = sync.OnceValue(func() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", itUser+"@"+remoteHost, "true")
+	cmd.Dir = "/"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ssh %s@%s: %w: %s", itUser, remoteHost, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+})
+
+// beginRemote is begin for tests that replicate through ssh localhost.
+func beginRemote(t *testing.T) {
+	t.Helper()
+	begin(t)
+	if err := sshReady(); err != nil {
+		t.Fatalf("%v (run scripts/ci/setup-zfs.sh: sshd, root's key, known_hosts)", err)
+	}
+}
+
+// remoteGrantLine matches the grant commands of a preflight failure for a
+// remote side, e.g. "  [localhost]  zfs allow -u syngoid-it receive,create,mount syngoid-dst/x".
+var remoteGrantLine = regexp.MustCompile(`(?m)^\s+\[` + remoteHost + `\]\s+(zfs allow .*\S)\s*$`)
+
+// grantFromRemotePreflight runs syngoid as root with args, which must fail
+// the preflight on its remote sides (exit 2), then runs the printed `zfs
+// allow` commands as root. A grant for anything but a child of a test pool
+// fails the test, so no test ever delegates on a pool's root dataset. It
+// returns the failed run.
+func grantFromRemotePreflight(t *testing.T, args ...string) result {
+	t.Helper()
+	r := syngoid(t, args...)
+	if r.code != 2 || !strings.Contains(r.stderr, "missing ZFS permissions") {
+		t.Fatalf("syngoid without grants: exit %d, want 2 with missing ZFS permissions", r.code)
+	}
+	if !strings.Contains(r.stderr, "  ["+remoteHost+"]  zfs allow -u "+itUser+" ") {
+		t.Fatalf("the preflight failure lacks a %q grant line", "[localhost]  zfs allow -u "+itUser+" …")
+	}
+	ms := remoteGrantLine.FindAllStringSubmatch(r.stderr, -1)
+	if len(ms) == 0 {
+		t.Fatal("the preflight failure printed no zfs allow command")
+	}
+	for _, m := range ms {
+		// zfs allow -u USER PERMS DATASET; the dataset may hold spaces.
+		f := strings.Fields(m[1])
+		if len(f) < 6 || f[1] != "allow" || f[2] != "-u" || f[3] != itUser {
+			t.Fatalf("unexpected grant command %q", m[1])
+		}
+		ds := strings.Join(f[5:], " ")
+		if !strings.HasPrefix(ds, srcPool+"/") && !strings.HasPrefix(ds, dstPool+"/") {
+			t.Fatalf("grant command %q is not for a child of a test pool", m[1])
+		}
+		t.Logf("running printed grant: %s", m[1])
+		zfs(t, "allow", "-u", itUser, f[4], ds)
+	}
+	return r
+}
+
+// procInfo is a live process and its argv.
+type procInfo struct {
+	pid  int
+	argv []string
+}
+
+// findProcs returns the live, non-zombie processes other than the test
+// itself whose command line, arguments joined by spaces, matches re (like
+// `pgrep -f`).
+func findProcs(re *regexp.Regexp) []procInfo {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var out []procInfo
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		if state, _, ok := procStat(pid); !ok || state == "Z" {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		if err != nil || len(cmdline) == 0 {
+			continue
+		}
+		argv := strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")
+		if re.MatchString(strings.Join(argv, " ")) {
+			out = append(out, procInfo{pid, argv})
+		}
+	}
+	return out
+}
+
+// waitNoProcs waits up to d for no process to match re and reports whether
+// that happened.
+func waitNoProcs(re *regexp.Regexp, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		if len(findProcs(re)) == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// receiveInto matches the command line of a `zfs receive` into ds on this
+// machine, wherever it runs from (the agent of an ssh localhost target).
+func receiveInto(ds string) *regexp.Regexp {
+	return regexp.MustCompile(`zfs receive.* ` + regexp.QuoteMeta(ds) + `( |$)`)
+}
+
+// remoteInterruptWait bounds how long interruptRemote lets the send stream
+// before freezing it: the transfer crosses ssh, so it needs longer than a
+// local one to reach interruptBytes.
+const remoteInterruptWait = 2 * time.Second
+
+// interruptRemote runs syngoid as root with args, a local zfs send into the
+// zfs receive matched by recv (the agent's, on this machine), and interrupts
+// it mid-transfer by delivering sig to syngoid: once the send has streamed a
+// little (see interruptBytes) it is stopped, so the transfer cannot complete
+// however fast it is, and the receive has taken in the start of the stream
+// (so a resume token will be saved). SIGKILL also kills the frozen send;
+// for other signals the send is continued once the receive has ended, since
+// syngoid cannot reap a stopped process. It returns syngoid's outcome.
+func interruptRemote(t *testing.T, sig syscall.Signal, recv *regexp.Regexp, args ...string) result {
+	t.Helper()
+	cmd := syngoidCmd("", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	pid := cmd.Process.Pid
+	sendPID := 0
+	killAll := func() {
+		for _, p := range []int{pid, sendPID} {
+			if p != 0 {
+				_ = syscall.Kill(p, syscall.SIGKILL)
+			}
+		}
+	}
+	finish := func() result {
+		var err error
+		select {
+		case err = <-done:
+		case <-time.After(2 * time.Minute):
+			killAll()
+			t.Fatalf("syngoid did not exit within 2 minutes (killed: %v)", <-done)
+		}
+		lastEnd = time.Now()
+		r := result{stdout: stdout.String(), stderr: stderr.String()}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			r.code = ee.ExitCode()
+		}
+		logResult(t, "", args, r)
+		return r
+	}
+	abort := func(format string, a ...any) {
+		t.Helper()
+		killAll()
+		finish()
+		t.Fatalf(format, a...)
+	}
+
+	deadline := time.Now().Add(2 * time.Minute)
+	for sendPID == 0 {
+		select {
+		case err := <-done:
+			done <- err
+			abort("syngoid exited before its transfer could be interrupted")
+		default:
+		}
+		if time.Now().After(deadline) {
+			abort("no zfs send child appeared within 2 minutes")
+		}
+		for p, argv := range childProcs(pid) {
+			if len(argv) >= 2 && filepath.Base(argv[0]) == "zfs" && argv[1] == "send" && !slices.Contains(argv, "-nvP") {
+				sendPID = p
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	until := time.Now().Add(remoteInterruptWait)
+	for running(sendPID) && procWritten(sendPID) < interruptBytes && time.Now().Before(until) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !running(sendPID) {
+		abort("zfs send finished before it could be frozen; the test data is too small")
+	}
+	if err := syscall.Kill(sendPID, syscall.SIGSTOP); err != nil {
+		abort("stopping zfs send: %v", err)
+	}
+	t.Logf("froze zfs send (pid %d) after %d bytes", sendPID, procWritten(sendPID))
+
+	// Wait for the receive to exist and to have read a little more than its
+	// BEGIN record. Without I/O accounting (procRead == 0) this waits the
+	// full timeout and carries on.
+	var recvPID int
+	drainBy := time.Now().Add(30 * time.Second)
+	for time.Now().Before(drainBy) {
+		recvPID = 0
+		for _, p := range findProcs(recv) {
+			if filepath.Base(p.argv[0]) == "zfs" {
+				recvPID = p.pid
+			}
+		}
+		if recvPID != 0 && procRead(recvPID) >= 1<<20 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if recvPID == 0 {
+		_ = syscall.Kill(sendPID, syscall.SIGCONT)
+		abort("no zfs receive matching %s appeared", recv)
+	}
+	t.Logf("zfs receive (pid %d) has read %d bytes", recvPID, procRead(recvPID))
+
+	if err := syscall.Kill(pid, sig); err != nil {
+		_ = syscall.Kill(sendPID, syscall.SIGCONT)
+		abort("signalling syngoid: %v", err)
+	}
+	if sig == syscall.SIGKILL {
+		_ = syscall.Kill(sendPID, syscall.SIGKILL)
+	} else {
+		// Let syngoid cancel the receive before the sender may run again.
+		waitNoProcs(recv, 15*time.Second)
+		_ = syscall.Kill(sendPID, syscall.SIGCONT)
+	}
+	return finish()
 }

@@ -3,7 +3,11 @@
 # installs the ZFS tools, creates the file-backed pools syngoid-src and
 # syngoid-dst (1 GiB sparse files) and the unprivileged user syngoid-it used
 # by the delegation tests, and installs Perl syncoid 2.2.0 (/usr/local/bin/syncoid)
-# for the interoperability tests. Idempotent. Re-executes itself through sudo.
+# for the interoperability tests. For the remote tests it also starts sshd and
+# sets up key-based ssh from root to root@localhost and syngoid-it@localhost
+# (known_hosts included, no passphrase), and lets syngoid-it run zfs through
+# `sudo -n` (/etc/sudoers.d/syngoid-it). Idempotent. Re-executes itself through
+# sudo.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -52,9 +56,78 @@ for pool in "${pools[@]}"; do
 	zpool create -f "$pool" "$img_dir/$pool.img"
 done
 
+# syngoid-it is also an ssh login: it needs a home (the remote tests push the
+# agent to ~/.cache/syngoid), a real shell and an account sshd does not treat
+# as locked ("*" is not a valid hash, so no password login is possible).
+it_home=/home/$it_user
 if ! id "$it_user" >/dev/null 2>&1; then
-	useradd --system --no-create-home --shell /usr/sbin/nologin "$it_user"
+	useradd --system --create-home --home-dir "$it_home" --shell /bin/bash "$it_user"
 fi
+if [ "$(getent passwd "$it_user" | cut -d: -f7)" != /bin/bash ] ||
+	[ "$(getent passwd "$it_user" | cut -d: -f6)" != "$it_home" ]; then
+	# An account created by an older version of this script.
+	usermod --home "$it_home" --shell /bin/bash "$it_user"
+fi
+usermod --password '*' "$it_user"
+install -d -m 0750 -o "$it_user" -g "$(id -gn "$it_user")" "$it_home"
+
+# sshd on localhost for the remote tests.
+if [ ! -x /usr/sbin/sshd ] || ! command -v ssh-keyscan >/dev/null 2>&1; then
+	apt-get install -y -q openssh-server openssh-client
+fi
+ssh-keygen -A
+mkdir -p /run/sshd
+if ! { systemctl start ssh || service ssh start; } >/dev/null 2>&1; then
+	/usr/sbin/sshd
+fi
+for _ in $(seq 20); do
+	if [ -n "$(ssh-keyscan -T 2 localhost 2>/dev/null)" ]; then
+		break
+	fi
+	sleep 1
+done
+
+# Root's key logs in as root and as syngoid-it; the initiator runs as root.
+install -d -m 0700 /root/.ssh
+if [ ! -f /root/.ssh/id_ed25519 ]; then
+	ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519
+fi
+pubkey=$(ssh-keygen -y -f /root/.ssh/id_ed25519)
+authorize() { # authorize FILE OWNER: append the public key unless present
+	local file=$1 owner=$2
+	install -d -m 0700 -o "$owner" -g "$(id -gn "$owner")" "$(dirname "$file")"
+	touch "$file"
+	if ! grep -qxF "$pubkey" "$file"; then
+		echo "$pubkey" >>"$file"
+	fi
+	chown "$owner:$(id -gn "$owner")" "$file"
+	chmod 0600 "$file"
+}
+authorize "$it_home/.ssh/authorized_keys" "$it_user"
+authorize /root/.ssh/authorized_keys root
+touch /root/.ssh/known_hosts
+if ! ssh-keygen -F localhost -f /root/.ssh/known_hosts >/dev/null; then
+	ssh-keyscan -H localhost >>/root/.ssh/known_hosts
+fi
+
+# The --sudo tests: syngoid-it may run exactly the zfs binary as root.
+zfs_bin=$(command -v zfs)
+sudo_rule="$it_user ALL=(root) NOPASSWD: $zfs_bin"
+zfs_real=$(readlink -f "$zfs_bin")
+if [ "$zfs_real" != "$zfs_bin" ]; then
+	sudo_rule="$sudo_rule, $zfs_real"
+fi
+sudoers_tmp=$(mktemp)
+echo "$sudo_rule" >"$sudoers_tmp"
+visudo -cf "$sudoers_tmp"
+install -m 0440 -o root -g root "$sudoers_tmp" "/etc/sudoers.d/$it_user"
+rm -f "$sudoers_tmp"
+
+# Fail here, with a clear message, rather than in every remote test.
+for target in "$it_user@localhost" root@localhost; do
+	ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" true
+done
+sudo -n -u "$it_user" -- sudo -n "$zfs_bin" version >/dev/null
 
 zfs version
 zpool list "${pools[@]}"

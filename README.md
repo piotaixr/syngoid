@@ -150,7 +150,10 @@ interoperability with Perl syncoid 2.2.0. The tests sit behind the `integration`
 with ZFS, as root, with `SYNGOID_IT=1`. They only touch two dedicated file-backed pools.
 
 Prepare an Ubuntu host. The script installs ZFS, creates the pools `syngoid-src` and `syngoid-dst` from sparse files
-under `/var/tmp/syngoid-it`, adds the user `syngoid-it`, and installs syncoid 2.2.0 pinned by checksum:
+under `/var/tmp/syngoid-it`, adds the user `syngoid-it` (with a home and a shell), and installs syncoid 2.2.0 pinned by
+checksum. For the remote tests, which replicate over `ssh localhost`, it also starts `sshd`, creates root's ed25519 key
+(authorized for `root` and `syngoid-it`, `localhost` in root's `known_hosts`) and adds the sudoers rule
+`/etc/sudoers.d/syngoid-it` that lets `syngoid-it` run `zfs` through `sudo -n`:
 
 ```sh
 scripts/ci/setup-zfs.sh
@@ -159,7 +162,7 @@ scripts/ci/setup-zfs.sh
 Then run:
 
 ```sh
-sudo -E env PATH=$PATH SYNGOID_IT=1 go test -tags integration -v -timeout 30m ./test/integration/...
+sudo -E env PATH=$PATH SYNGOID_IT=1 go test -tags integration -v -timeout 45m ./test/integration/...
 ```
 
 Every test first destroys all children of the two test pools, and the suite refuses to run when they do not exist.
