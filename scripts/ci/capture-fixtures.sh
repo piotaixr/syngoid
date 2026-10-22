@@ -136,6 +136,13 @@ recv_full() { # SNAP DEST FLAGS...
 recv_resume() { # TOKEN DEST
 	zfs send -t "$1" 2>/dev/null | zfs receive -s "$2"
 }
+recv_inc() { # FROM TO DEST FLAGS...
+	_from=$1
+	_to=$2
+	_dst=$3
+	shift 3
+	zfs send -i "$_from" "$_to" 2>/dev/null | zfs receive "$@" "$_dst"
+}
 
 : >"$out/commands.txt"
 : >"$out/grants.txt"
@@ -268,12 +275,24 @@ recv_full "$fx/r@r1" "$pool/exist" >/dev/null 2>&1
 errcap stderr_dest_exists.txt recv_resume "$token" "$pool/exist"
 errcap stderr_dest_exists_plain.txt recv_full "$fx/r@r1" "$pool/exist" -s -F
 errcap stderr_dest_exists_noF.txt recv_full "$fx/r@r1" "$pool/exist" -s
+# None of the three above says "cannot restore to X: destination already
+# exists" (run 39853662415). That is libzfs' report of a receive the kernel
+# refuses because the destination already has the target snapshot name: here
+# an incremental s1..s2 onto a copy of s1 that has its own @s2.
+recv_full "$fx/a@s1" "$pool/conflict" >/dev/null 2>&1
+zfs snapshot "$pool/conflict@s2"
+errcap stderr_dest_exists_snap.txt recv_inc "$fx/a@s1" "$fx/a@s2" "$pool/conflict" -s -F
 
 errcap stderr_no_dataset.txt zfs list -H -o name "$pool/nope"
 errcap stderr_no_dataset_get.txt zfs get -Hp -r -t snapshot -o name,property,value guid,createtxg,creation "$pool/nope"
 errcap stderr_recv_no_parent.txt recv_full "$fx/a@s1" "$pool/nope/child" -s -F
 
-# Resume after the source snapshot is gone.
+# Resume after the source snapshot is gone. zfs send -t falls back to any
+# snapshot carrying the token's guid, so the received copies of fx/r@r1 go
+# first (syngoidfx/exist; on illumos the -F receive into syngoidfx/rx
+# completed too).
+zfs destroy -r "$pool/exist"
+zfs destroy -r "$pool/rx"
 zfs destroy "$fx/r@r1"
 errcap stderr_resume_source_gone.txt zfs send -t "$token"
 
