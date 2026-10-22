@@ -1,0 +1,73 @@
+name: fixtures
+
+# Captures real zfs, zfs allow and ps output on Linux, FreeBSD and illumos
+# (OmniOS) for the parser tests (spec 14.3, 14.4). Run it by hand, download the
+# fixtures-<os> artifacts and copy them into the testdata directories.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: install ZFS
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -q
+          sudo apt-get install -y -q zfsutils-linux
+          if ! sudo modprobe zfs; then
+            # Some cloud kernels ship the zfs module in the extra modules package.
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sudo modprobe zfs
+          fi
+      - name: capture
+        run: sudo sh scripts/ci/capture-fixtures.sh "$PWD/fixtures-out"
+      - name: hand the files back to the runner user
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" fixtures-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fixtures-linux
+          path: fixtures-out
+          if-no-files-found: warn
+
+  freebsd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: capture in a FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            kldstat -q -m zfs || kldload zfs
+          run: |
+            sh scripts/ci/capture-fixtures.sh "$PWD/fixtures-out"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fixtures-freebsd
+          path: fixtures-out
+          if-no-files-found: warn
+
+  omnios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: capture in an OmniOS VM
+        uses: vmactions/omnios-vm@v1
+        with:
+          usesh: true
+          run: |
+            sh scripts/ci/capture-fixtures.sh "$PWD/fixtures-out"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fixtures-omnios
+          path: fixtures-out
+          if-no-files-found: warn

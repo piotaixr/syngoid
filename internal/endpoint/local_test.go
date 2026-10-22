@@ -122,6 +122,37 @@ func TestLocalReceiveBusyError(t *testing.T) {
 	}
 }
 
+func TestLocalReceiveBusyPsFallback(t *testing.T) {
+	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
+		"ps -Ao args=": {Stderr: "ps: illegal option -- o\n", Exit: 1},
+		"ps -eo args":  {Stdout: "ARGS\nzfs receive -s tank/b\n"},
+	}}
+	got, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/b", "tank/c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"tank/b": true, "tank/c": false}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ReceiveBusy = %v, want %v", got, want)
+	}
+}
+
+func TestLocalReceiveBusyPsFallbackDropsHeader(t *testing.T) {
+	// The header is the first line whatever it says: a dataset named like it
+	// must not be reported busy.
+	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
+		"ps -Ao args=": {Exit: 1},
+		"ps -eo args":  {Stdout: "zfs receive tank/h\n/sbin/init\n"},
+	}}
+	got, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["tank/h"] {
+		t.Errorf("header line was scanned: %v", got)
+	}
+}
+
 func payload(n int) []byte {
 	b := make([]byte, n)
 	for i := range b {

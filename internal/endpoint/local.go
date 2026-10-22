@@ -73,14 +73,34 @@ func (l *Local) Allow(ctx context.Context, ds string) (string, error) {
 	return l.Output(ctx, "allow", ds)
 }
 
+// processArgs lists the argument list of every process, one per line. It
+// prefers `ps -Ao args=` (no header line); when that fails, as on a ps that
+// rejects the "args=" header suppression, it falls back to `ps -eo args` and
+// drops the header line.
+func (l *Local) processArgs(ctx context.Context) ([]string, error) {
+	var out strings.Builder
+	err := l.exec.Run(ctx, zfs.Cmd{Argv: []string{"ps", "-Ao", "args="}, Stdout: &out})
+	if err == nil {
+		return strings.Split(out.String(), "\n"), nil
+	}
+	if ctx.Err() != nil {
+		return nil, err
+	}
+	out.Reset()
+	if err := l.exec.Run(ctx, zfs.Cmd{Argv: []string{"ps", "-eo", "args"}, Stdout: &out}); err != nil {
+		return nil, err
+	}
+	_, rest, _ := strings.Cut(out.String(), "\n")
+	return strings.Split(rest, "\n"), nil
+}
+
 // ReceiveBusy lists processes once and reports which datasets are the target
 // of a running zfs receive.
 func (l *Local) ReceiveBusy(ctx context.Context, datasets []string) (map[string]bool, error) {
-	var out strings.Builder
-	if err := l.exec.Run(ctx, zfs.Cmd{Argv: []string{"ps", "-Ao", "args="}, Stdout: &out}); err != nil {
+	lines, err := l.processArgs(ctx)
+	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(out.String(), "\n")
 	for i, ln := range lines {
 		lines[i] = strings.TrimRight(ln, " \t\r")
 	}
