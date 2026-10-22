@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/piotaixr/syngoid/internal/zfs"
@@ -20,7 +21,10 @@ func TestValidate(t *testing.T) {
 		{"exists empty component", MethodExists, DatasetParams{Dataset: "tank//a"}, "dataset"},
 		{"exists empty", MethodExists, DatasetParams{}, "dataset"},
 		{"exists snapshot name", MethodExists, DatasetParams{Dataset: "tank/a@s"}, "dataset"},
-		{"exists too long", MethodExists, DatasetParams{Dataset: string(make([]byte, 256))}, "dataset"},
+		{"exists 255 bytes", MethodExists, DatasetParams{Dataset: strings.Repeat("a", 255)}, ""},
+		{"exists 256 bytes", MethodExists, DatasetParams{Dataset: strings.Repeat("a", 256)}, "dataset"},
+		{"exists 255 bytes in components", MethodExists, DatasetParams{Dataset: strings.Repeat("a/", 127) + "a"}, ""},
+		{"exists 256 bytes in components", MethodExists, DatasetParams{Dataset: strings.Repeat("a/", 127) + "aa"}, "dataset"},
 		{"list_tree newline", MethodListTree, DatasetParams{Dataset: "tank\n-r"}, "dataset"},
 		{"destroy_dataset ok", MethodDestroyDataset, DatasetParams{Dataset: "tank/a"}, ""},
 		{"destroy ok", MethodDestroy, DestroyParams{Dataset: "tank/a", Snaps: []string{"s1", "s2"}}, ""},
@@ -36,7 +40,8 @@ func TestValidate(t *testing.T) {
 		{"hold ok", MethodHold, HoldParams{Tag: "syncoid_nas", Snapshot: "tank/a@s"}, ""},
 		{"hold empty tag", MethodHold, HoldParams{Snapshot: "tank/a@s"}, "tag"},
 		{"hold control tag", MethodHold, HoldParams{Tag: "a\x00b", Snapshot: "tank/a@s"}, "tag"},
-		{"hold long tag", MethodHold, HoldParams{Tag: string(make([]byte, 256)), Snapshot: "tank/a@s"}, "tag"},
+		{"hold 255 byte tag", MethodHold, HoldParams{Tag: strings.Repeat("a", 255), Snapshot: "tank/a@s"}, ""},
+		{"hold 256 byte tag", MethodHold, HoldParams{Tag: strings.Repeat("a", 256), Snapshot: "tank/a@s"}, "tag"},
 		{"hold bad snapshot", MethodHold, HoldParams{Tag: "t", Snapshot: "tank/a#s"}, "snapshot"},
 		{"release ok", MethodRelease, HoldParams{Tag: "t", Snapshot: "tank/a@s"}, ""},
 		{"release flag tag", MethodRelease, HoldParams{Tag: "-r", Snapshot: "tank/a@s"}, "tag"},
@@ -110,5 +115,32 @@ func TestValidateReportsOffendingValue(t *testing.T) {
 	var ie *InvalidError
 	if !errors.As(err, &ie) || ie.Value != "-r" {
 		t.Fatalf("Validate = %v, want InvalidError with Value -r", err)
+	}
+}
+
+func TestValidateReceiveArgsValue(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"dangling -x names the flag", []string{"-s", "-x"}, "-x"},
+		{"dangling -o names the flag", []string{"-o"}, "-o"},
+		{"bad -x value", []string{"-x", "-F"}, "-F"},
+		{"bad -o value", []string{"-o", "-x=1"}, "-x=1"},
+		{"bad -o newline value", []string{"-o", "a=b\nc"}, "a=b\nc"},
+		{"unknown flag", []string{"-s", "--force"}, "--force"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Validate(MethodReceive, ReceiveParams{Spec: zfs.RecvSpec{Dataset: "tank/b", Args: tt.args}})
+			var ie *InvalidError
+			if !errors.As(err, &ie) {
+				t.Fatalf("Validate = %v, want *InvalidError", err)
+			}
+			if ie.Field != "spec.args" || ie.Value != tt.want {
+				t.Errorf("got Field %q Value %q, want spec.args %q", ie.Field, ie.Value, tt.want)
+			}
+		})
 	}
 }
