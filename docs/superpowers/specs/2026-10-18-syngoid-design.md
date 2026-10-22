@@ -222,7 +222,8 @@ Exact signatures are settled during implementation; the method set above is the 
 For each remote host the initiator starts one OpenSSH ControlMaster
 (`-o ControlMaster=yes -o ControlPath=<private 0700 tmpdir>/cm-<n> -o ControlPersist=60`, one socket per host) — as
 syncoid does today — so probe, push, and `serve` reuse a single authenticated connection (one password prompt / hardware-key touch). The
-master is closed with `ssh -O exit` at the end of the run. User `-o` options and `--ssh-config` are passed to every
+master runs with `-n` (stdin belongs to the caller, e.g. a `while read` loop; ssh prompts on `/dev/tty`) and is
+closed with `ssh -O exit` at the end of the run. User `-o` options and `--ssh-config` are passed to every
 invocation. `-o BatchMode=yes` is added when stdin is not a TTY unless the user passed a `BatchMode` option.
 
 ### 5.2 Probe

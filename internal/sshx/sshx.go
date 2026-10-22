@@ -88,7 +88,6 @@ type Master struct {
 	ctlp  string // control socket path
 
 	// Test hooks; zero values select the production defaults.
-	stdin     io.Reader     // master stdin (default os.Stdin)
 	closeWait time.Duration // Proc.Close wait and Master.Close timeout (default 5 s)
 	killGrace time.Duration // SIGTERM to SIGKILL delay on cancel (default 5 s)
 }
@@ -172,7 +171,9 @@ func optionKey(o string) string {
 }
 
 func (m *Master) masterArgv() []string {
-	return m.argv([]string{"-o", "ControlMaster=yes", "-o", "ControlPersist=60"}, false, "exit")
+	// -n: the master never reads stdin, which belongs to the caller (e.g. a
+	// `while read` loop); ssh prompts on /dev/tty, not stdin.
+	return m.argv([]string{"-n", "-o", "ControlMaster=yes", "-o", "ControlPersist=60"}, false, "exit")
 }
 
 func (m *Master) clientArgv(cmd string) []string {
@@ -222,9 +223,9 @@ func (m *Master) grace() time.Duration {
 	return defaultGrace
 }
 
-// Start brings the master up in the foreground process group with the
-// process's stdin so ssh can prompt for a password. The master then
-// daemonizes (ControlPersist). A failure is an *Error.
+// Start brings the master up in the foreground process group so ssh can
+// prompt for a password on the terminal (/dev/tty); its stdin is /dev/null.
+// The master then daemonizes (ControlPersist). A failure is an *Error.
 //
 // The master's stderr goes to a file in the control directory, not a pipe: a
 // ProxyCommand child inherits it for the master's whole life, and a pipe read
@@ -242,16 +243,12 @@ func (m *Master) Start(ctx context.Context) error {
 	}()
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	if m.stdin != nil {
-		cmd.Stdin = m.stdin
-	} else {
-		cmd.Stdin = os.Stdin
-	}
+	cmd.Stdin = nil  // /dev/null, like -n
 	cmd.Stdout = nil // /dev/null
 	cmd.Stderr = errFile
 	// Same group as the caller: only the ssh process itself is signalled.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = pipeDelay // only matters for a non-file test stdin
+	cmd.WaitDelay = pipeDelay // SIGKILL if SIGTERM is ignored after a cancel
 	err = cmd.Run()
 	if errors.Is(err, exec.ErrWaitDelay) {
 		err = nil // exited 0
