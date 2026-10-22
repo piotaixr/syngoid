@@ -35,6 +35,38 @@ func newTimeoutHarness(t *testing.T, d time.Duration) *harness {
 	return newHarness(t, nil)
 }
 
+// offered is one report of offerHook.
+type offered struct {
+	id            uint64
+	taken, parked bool
+}
+
+// newOfferHarness is newTimeoutHarness whose agent reports what became of
+// each data stream on the returned channel.
+func newOfferHarness(t *testing.T, d time.Duration) (*harness, <-chan offered) {
+	offers := make(chan offered, 16)
+	old := offerHook
+	offerHook = func(id uint64, taken, parked bool) { offers <- offered{id, taken, parked} }
+	t.Cleanup(func() { offerHook = old })
+	return newTimeoutHarness(t, d), offers
+}
+
+// awaitOffer returns the next report about a stream for request id.
+func awaitOffer(t *testing.T, offers <-chan offered, id uint64) offered {
+	t.Helper()
+	timeout := time.After(wait)
+	for {
+		select {
+		case o := <-offers:
+			if o.id == id {
+				return o
+			}
+		case <-timeout:
+			t.Fatalf("no data stream for request %d reached the rendezvous", id)
+		}
+	}
+}
+
 // openData opens a data stream and writes its header for request id and
 // payload in a single write.
 func (h *harness) openData(id uint64, payload []byte) *yamux.Stream {
@@ -119,7 +151,7 @@ func TestAgentDataStreamTimeout(t *testing.T) {
 }
 
 func TestAgentStreamBeforeRequest(t *testing.T) {
-	h := newHarness(t, nil)
+	h, offers := newOfferHarness(t, dataStreamTimeout)
 	h.hello(matchingHello())
 	h.world.Create("pool", "")
 	// More than a bufio buffer's worth of payload travels in the same write
@@ -128,8 +160,9 @@ func TestAgentStreamBeforeRequest(t *testing.T) {
 	id := h.nextID + 1
 	st := h.openData(id, payload)
 	_ = st.Close()
-	// Let the agent park the stream before the request exists.
-	time.Sleep(50 * time.Millisecond)
+	if o := awaitOffer(t, offers, id); !o.taken || !o.parked {
+		t.Fatalf("stream offer = %+v, want it parked before the request exists", o)
+	}
 
 	if got := h.send(rpc.MethodReceive, rpc.ReceiveParams{Spec: zfs.RecvSpec{Dataset: "pool/a"}, Codec: stream.None}); got != id {
 		t.Fatalf("request id = %d, want %d", got, id)
@@ -172,7 +205,7 @@ func TestAgentSendStreamsThenProgressThenResponse(t *testing.T) {
 }
 
 func TestAgentClosesStrayDataStreams(t *testing.T) {
-	h := newTimeoutHarness(t, 200*time.Millisecond)
+	h, offers := newOfferHarness(t, 200*time.Millisecond)
 	h.hello(matchingHello())
 	h.world.Create("pool", "")
 
@@ -189,8 +222,14 @@ func TestAgentClosesStrayDataStreams(t *testing.T) {
 	payload := sendStream(t, sourceWorld())
 	id := h.send(rpc.MethodReceive, rpc.ReceiveParams{Spec: zfs.RecvSpec{Dataset: "pool/a"}, Codec: stream.None})
 	first := h.openData(id, payload)
-	time.Sleep(50 * time.Millisecond) // let the request claim the first stream
-	readAll(t, h.openData(id, []byte("junk")), "a second stream for the same request")
+	if o := awaitOffer(t, offers, id); !o.taken {
+		t.Fatalf("first stream offer = %+v, want it taken", o)
+	}
+	junk := h.openData(id, []byte("junk"))
+	if o := awaitOffer(t, offers, id); o.taken {
+		t.Fatalf("second stream offer = %+v, want it rejected", o)
+	}
+	readAll(t, junk, "a second stream for the same request")
 	_ = first.Close()
 	if m := h.await(id); m.Error != nil {
 		t.Fatalf("receive: %+v", m.Error)

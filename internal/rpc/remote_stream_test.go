@@ -14,6 +14,7 @@ import (
 	"github.com/piotaixr/syngoid/internal/agent/agenttest"
 	"github.com/piotaixr/syngoid/internal/endpoint"
 	"github.com/piotaixr/syngoid/internal/endpoint/fake"
+	"github.com/piotaixr/syngoid/internal/rpc"
 	"github.com/piotaixr/syngoid/internal/stream"
 	"github.com/piotaixr/syngoid/internal/zfs"
 )
@@ -279,5 +280,97 @@ func TestRemoteSendError(t *testing.T) {
 	}
 	if w.Len() != 0 {
 		t.Errorf("w got %d bytes from a failed send, want none", w.Len())
+	}
+}
+
+// stallWriter signals entered on its first Write, which then blocks until
+// unstall.
+type stallWriter struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newStallWriter(t *testing.T) *stallWriter {
+	w := &stallWriter{entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(w.release) })
+	return w
+}
+
+func (w *stallWriter) Write([]byte) (int, error) {
+	w.once.Do(func() { close(w.entered) })
+	<-w.release
+	return 0, io.ErrClosedPipe
+}
+
+// sendAsync runs Send of "endless/ds" into w in the background.
+func sendAsync(ctx context.Context, r endpoint.Endpoint, w io.Writer) <-chan error {
+	errc := make(chan error, 1)
+	go func() {
+		errc <- r.Send(ctx, zfs.SendSpec{Dataset: "endless/ds", To: "s1"}, endpoint.SendOpts{Codec: stream.None}, w)
+	}()
+	return errc
+}
+
+func TestRemoteSendStalledWriterCancel(t *testing.T) {
+	rpc.SetCancelGrace(t, 100*time.Millisecond)
+	r, _ := startTest(t, newTestEP(populated()), false, nil)
+	w := newStallWriter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errc := sendAsync(ctx, r, w)
+	recv(t, w.entered, wait, "the copy to block in w.Write")
+	cancel()
+	if err := recv(t, errc, time.Second, "Send to return despite the stalled w"); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRemoteSendConnectionLostMidStream(t *testing.T) {
+	r, conn := startTest(t, newTestEP(populated()), false, nil)
+	w := newStallWriter(t)
+	errc := sendAsync(context.Background(), r, w)
+	recv(t, w.entered, wait, "the stream to flow")
+	_ = conn.Close()
+	if err := recv(t, errc, 2*time.Second, "Send to return after the connection died"); !errors.Is(err, rpc.ErrConnectionLost) {
+		t.Errorf("err = %v, want ErrConnectionLost", err)
+	}
+}
+
+// signalReader closes flowing once n bytes have been read through it.
+type signalReader struct {
+	r       io.Reader
+	n       int
+	flowing chan struct{}
+}
+
+func (s *signalReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if s.n > 0 {
+		if s.n -= n; s.n <= 0 {
+			close(s.flowing)
+		}
+	}
+	return n, err
+}
+
+func TestRemoteReceiveConnectionLostMidStream(t *testing.T) {
+	var header bytes.Buffer
+	if err := fake.New(populated(), hostInfo).Send(context.Background(), zfs.SendSpec{Dataset: "tank/a", To: "s1"}, endpoint.SendOpts{Codec: stream.None}, &header); err != nil {
+		t.Fatal(err)
+	}
+	w := fake.NewWorld()
+	w.Create("pool", "")
+	r, conn := startTest(t, newTestEP(w), false, nil)
+	// A valid fake stream header, then padding the agent drains forever.
+	rd := &signalReader{r: io.MultiReader(&header, endless{}), n: 1 << 20, flowing: make(chan struct{})}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- r.Receive(context.Background(), zfs.RecvSpec{Dataset: "pool/a"}, stream.None, rd)
+	}()
+	recv(t, rd.flowing, wait, "the stream to flow")
+	_ = conn.Close()
+	if err := recv(t, errc, 2*time.Second, "Receive to return after the connection died"); !errors.Is(err, rpc.ErrConnectionLost) {
+		t.Errorf("err = %v, want ErrConnectionLost", err)
 	}
 }
