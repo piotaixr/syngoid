@@ -16,17 +16,30 @@ var agentDir = regexp.MustCompile(`^(dev|[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*)(-
 // PruneSiblings removes the stale agent directories next to the one holding
 // exe. It acts only when exe lives in $home/.cache/syngoid/<dir> with <dir>
 // named like an agent directory, and keeps that directory plus the sibling
-// agent directory with the newest modification time. When several siblings
-// share the newest time it cannot tell which is newer and removes nothing.
-// Only real directories are considered; files and symlinks are left alone.
+// agent directory with the newest modification time; siblings sharing that
+// time are all kept. Only real directories are considered; files and symlinks are left alone.
 // Problems are logged at debug level.
 func PruneSiblings(exe, home string, log *slog.Logger) {
 	if exe == "" || home == "" {
 		return
 	}
-	base := filepath.Join(home, ".cache", "syngoid")
+	// The kernel reports exe with symlinks resolved but $HOME may reach it
+	// through one (FreeBSD's /home is /usr/home), so compare resolved paths.
 	cur := filepath.Dir(filepath.Clean(exe))
-	if filepath.Dir(cur) != base || !agentDir.MatchString(filepath.Base(cur)) {
+	if !agentDir.MatchString(filepath.Base(cur)) {
+		return
+	}
+	base, err := filepath.EvalSymlinks(filepath.Join(home, ".cache", "syngoid"))
+	if err != nil {
+		log.Debug("prune: " + err.Error())
+		return
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(cur))
+	if err != nil {
+		log.Debug("prune: " + err.Error())
+		return
+	}
+	if parent != base {
 		return
 	}
 	entries, err := os.ReadDir(base)
@@ -40,7 +53,6 @@ func PruneSiblings(exe, home string, log *slog.Logger) {
 	}
 	var sibs []sibling
 	var newest time.Time
-	newestCount := 0
 	for _, e := range entries {
 		if !e.IsDir() || e.Name() == filepath.Base(cur) || !agentDir.MatchString(e.Name()) {
 			continue
@@ -52,15 +64,9 @@ func PruneSiblings(exe, home string, log *slog.Logger) {
 		}
 		mod := info.ModTime()
 		sibs = append(sibs, sibling{e.Name(), mod})
-		switch {
-		case mod.After(newest):
-			newest, newestCount = mod, 1
-		case mod.Equal(newest):
-			newestCount++
+		if mod.After(newest) {
+			newest = mod
 		}
-	}
-	if newestCount != 1 {
-		return
 	}
 	for _, s := range sibs {
 		if s.mod.Equal(newest) {

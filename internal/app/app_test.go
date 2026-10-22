@@ -217,8 +217,9 @@ func TestMainServeHandshake(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Main did not return after the remote closed")
 	}
-	if se.stderr.Len() != 0 || se.stdout.Len() != 0 {
-		t.Errorf("stdout %q, stderr %q, want both empty", se.stdout, se.stderr)
+	// Stdout is the mux (the handshake above parsed it); stderr is silent.
+	if se.stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", se.stderr)
 	}
 	if want := []bool{true}; !slices.Equal(se.newLocalCalls, want) {
 		t.Errorf("NewLocal sudo args = %v, want %v", se.newLocalCalls, want)
@@ -500,4 +501,35 @@ func TestMainPlanOutcomesLogged(t *testing.T) {
 			t.Errorf("stderr does not contain %q:\n%s", want, se.stderr)
 		}
 	})
+}
+
+func TestStdioConnCloseUnblocksRead(t *testing.T) {
+	// A reader that never returns, like a blocking os.Stdin with no input.
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	c := newStdioConn(readerFunc(func([]byte) (int, error) { <-block; return 0, io.EOF }), io.Discard)
+	errc := make(chan error, 1)
+	go func() { _, err := c.Read(make([]byte, 8)); errc <- err }()
+	time.Sleep(50 * time.Millisecond)
+	_ = c.Close()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Error("Read returned nil error after Close")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Read still blocked after Close")
+	}
+}
+
+func TestStdioConnReadsInOrder(t *testing.T) {
+	c := newStdioConn(strings.NewReader("hello world"), io.Discard)
+	got, err := io.ReadAll(io.LimitReader(c, 5))
+	if err != nil || string(got) != "hello" {
+		t.Fatalf("first read = %q, %v", got, err)
+	}
+	rest, err := io.ReadAll(c)
+	if err != nil || string(rest) != " world" {
+		t.Errorf("rest = %q, %v", rest, err)
+	}
 }
