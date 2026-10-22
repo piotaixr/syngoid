@@ -19,8 +19,9 @@ const (
 var connWriteTimeout = 2 * time.Minute
 
 // muxConfig returns the yamux configuration shared by both ends. Keepalive
-// is off (ssh already detects a dead link) and logging is discarded, as the
-// agent must never write to its stderr once the mux is up.
+// is off (ServerAlive on the initiator's ssh master detects a dead link) and
+// logging is discarded, as the agent must never write to its stderr once the
+// mux is up.
 func muxConfig() *yamux.Config { return muxConfigWindow(MaxStreamWindow) }
 
 // muxConfigWindow is muxConfig with the per-stream receive window set to
