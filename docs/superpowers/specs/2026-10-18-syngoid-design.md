@@ -227,12 +227,17 @@ invocation. `-o BatchMode=yes` is added when stdin is not a TTY unless the user 
 
 ### 5.2 Probe
 
-One `ssh host sh -c '<probe>'` returning, line-oriented: `uname -s`, `uname -m`, `isainfo -k` (illumos only),
-`$HOME`, and whether `<remote-bin-dir>/syngoid` is executable.
+One `ssh host sh -c '<probe>' syngoid-probe '<remote-bin-dir>'` returning exactly six lines: `uname -s`, `uname -m`,
+`isainfo -k` (illumos; `-` elsewhere), `$HOME`, the absolute bin dir, and `yes`/`no` for whether `<dir>/syngoid` is
+executable. The bin dir is passed single-quoted with a literal leading `~/`; the probe expands it against `$HOME`
+itself and prints the result, which must be absolute. Push and serve use only that absolute, quoted path. The probe
+script is a single line, and the bin dir (the option value and the probed result) must be printable ASCII (no
+newline, NUL or control character): the login shell may be csh or fish, which do not take every POSIX-quoted string.
 
 Platform mapping: `Linux`→`linux`, `FreeBSD`→`freebsd`, `SunOS`→`illumos`, `Darwin`→`darwin`;
 `x86_64`/`amd64`/`i86pc`(+`isainfo -k`=`amd64`)→`amd64`, `aarch64`/`arm64`→`arm64`, `armv7l`→`arm` (GOARM=7),
-`riscv64`→`riscv64`, `ppc64le`→`ppc64le`. Anything else → error listing supported platforms.
+`riscv64`→`riscv64`, `ppc64le`→`ppc64le`. The result must be a §11.1 target; anything else → error listing the
+supported platforms.
 
 Remote bin dir default: `~/.cache/syngoid/<version>/`; for dev builds `~/.cache/syngoid/<version>-<buildhash[:8]>/`.
 
@@ -247,22 +252,30 @@ Remote bin dir default: `~/.cache/syngoid/<version>/`; for dev builds `~/.cache/
 Failure of all three is a critical error naming the platform and the remedies (`syngoid fetch --platform …`,
 `--bin-store`).
 
+M2 resolves self → `--bin-store` dirs → `/usr/lib/syngoid/bin` (a store hit is the first regular file
+`DIR/<os>-<arch>/syngoid`); the user cache and download arrive with their verification in M3. Until then the
+failure names `--bin-store=DIR` and `/usr/lib/syngoid/bin/<os>-<arch>/syngoid`.
+
 ### 5.4 Push
 
-`ssh host sh -c 'umask 077; mkdir -p "$D" && cat > "$D/.syngoid.tmp.$$" && chmod 700 "$D/.syngoid.tmp.$$" && mv -f "$D/.syngoid.tmp.$$" "$D/syngoid"'`
-with the binary on stdin. `$D` is passed as a single-quoted, validated path (no shell metacharacters other than
-`~` expansion at the start).
+`ssh host sh -c 'umask 077; mkdir -p "$1" && cat > "$1/.syngoid.tmp.$$" && chmod 700 "$1/.syngoid.tmp.$$" && mv -f "$1/.syngoid.tmp.$$" "$1/syngoid"' syngoid-push '<D>'`
+with the binary on stdin. `<D>` is the probe's absolute bin dir, single-quoted. The initiator logs
+`INFO: [<host>] pushing syngoid agent to <host>:<D>/syngoid` and keeps the SHA-256 of the file it pushed.
 
 ### 5.5 Start and handshake
 
-`ssh host '<D>/syngoid' serve`. The first yamux stream is the control stream; the initiator sends `Hello`, the
-agent replies `Hello` (§7.2). Rules:
+`ssh host '<D>/syngoid' serve`, `<D>` the probe's absolute bin dir. The first yamux stream is the control stream; the
+initiator sends `Hello`, the agent replies `Hello` (§7.2). Rules:
 
 - `protocol` and `version` must be equal; for dev builds `build_hash` must also be equal.
 - The agent reports the SHA-256 of its own executable; if the initiator pushed in this run, it must equal the pushed
   file's hash (detects truncation/corruption).
-- On mismatch: close, push, restart, handshake again — once. A second mismatch is a critical error.
+- On mismatch or any other handshake failure (timeout, garbage, early exit): close, push, restart, handshake
+  again — once. A second failure is a critical error, `<host>: agent handshake failed: <err>`, followed by the
+  remote stderr when there is any.
 - Handshake timeout: 30 s.
+- Sessions: one ControlMaster per `[user@]host` and one agent session per (`[user@]host`, sudo); source and target
+  on the same host with the same sudo share one session.
 - After a successful handshake with a matching initiator the agent prunes sibling version directories, but only when
   it runs from `$HOME/.cache/syngoid/<dir>`. Only real directories named like agent directories
   (`^(dev|[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*)(-[0-9a-f]{8})?$`) are candidates, so other entries such as the
