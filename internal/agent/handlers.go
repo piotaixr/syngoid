@@ -25,8 +25,9 @@ func typed[P any](method string, fn func(ctx context.Context, ep endpoint.Endpoi
 	}
 }
 
-// handlers maps each method served as a plain request/response to its
-// handler. hello, cancel and shutdown are handled by the server loop.
+// handlers maps each method to its handler; send and receive also pair
+// with a data stream. hello, cancel and shutdown are handled by the server
+// loop.
 var handlers = map[string]handler{
 	rpc.MethodInfo: typed(rpc.MethodInfo, func(ctx context.Context, ep endpoint.Endpoint, _ struct{}) (any, error) {
 		return ep.Info(ctx)
@@ -79,5 +80,14 @@ var handlers = map[string]handler{
 	rpc.MethodAllow: typed(rpc.MethodAllow, func(ctx context.Context, ep endpoint.Endpoint, p rpc.DatasetParams) (any, error) {
 		return ep.Allow(ctx, p.Dataset)
 	}),
-	// Task 6 adds send and receive here; until then they are unknown methods.
+	rpc.MethodSend: func(ctx context.Context, s *server, req rpc.Message) (any, error) {
+		return typed(rpc.MethodSend, func(ctx context.Context, _ endpoint.Endpoint, p rpc.SendParams) (any, error) {
+			return nil, s.send(ctx, req.ID, p)
+		})(ctx, s, req)
+	},
+	rpc.MethodReceive: func(ctx context.Context, s *server, req rpc.Message) (any, error) {
+		return typed(rpc.MethodReceive, func(ctx context.Context, _ endpoint.Endpoint, p rpc.ReceiveParams) (any, error) {
+			return nil, s.receive(ctx, req.ID, p)
+		})(ctx, s, req)
+	},
 }

@@ -15,7 +15,6 @@ import (
 
 	"github.com/piotaixr/syngoid/internal/endpoint"
 	"github.com/piotaixr/syngoid/internal/logx"
-	"github.com/piotaixr/syngoid/internal/stream"
 	"github.com/piotaixr/syngoid/internal/zfs"
 )
 
@@ -44,8 +43,10 @@ type Remote struct {
 	// pending maps the id of each request awaiting its response to the
 	// channel the response goes to; nil once the reader has stopped.
 	pending map[uint64]chan Message
-	readErr error         // why the reader stopped; set before done closes
-	done    chan struct{} // closed when the reader stops
+	// progress maps the id of each pending send to its progress callback.
+	progress map[uint64]*progressSink
+	readErr  error         // why the reader stopped; set before done closes
+	done     chan struct{} // closed when the reader stops
 
 	closeOnce sync.Once
 }
@@ -100,16 +101,17 @@ func handshake(sess *yamux.Session, h Hello, label string, log *slog.Logger, rep
 		return nil, err
 	}
 	r := &Remote{
-		label:   label,
-		log:     log,
-		sess:    sess,
-		codec:   NewCodec(ctrl),
-		pending: map[uint64]chan Message{},
-		done:    make(chan struct{}),
+		label:    label,
+		log:      log,
+		sess:     sess,
+		codec:    NewCodec(ctrl),
+		pending:  map[uint64]chan Message{},
+		progress: map[uint64]*progressSink{},
+		done:     make(chan struct{}),
 	}
 	go r.read()
 
-	_, ch, err := r.request(MethodHello, h)
+	_, ch, err := r.request(MethodHello, h, nil)
 	if err != nil {
 		return r, err
 	}
@@ -128,7 +130,7 @@ func (r *Remote) read() {
 		m, err := r.codec.Read()
 		if err != nil {
 			r.mu.Lock()
-			r.pending = nil
+			r.pending, r.progress = nil, nil
 			r.readErr = err
 			r.mu.Unlock()
 			close(r.done)
@@ -143,6 +145,7 @@ func (r *Remote) read() {
 		r.mu.Lock()
 		ch := r.pending[m.ID]
 		delete(r.pending, m.ID)
+		delete(r.progress, m.ID)
 		r.mu.Unlock()
 		if ch != nil {
 			ch <- m
@@ -150,13 +153,18 @@ func (r *Remote) read() {
 	}
 }
 
-// event re-logs an agent log event under the Remote's label. Progress
-// events belong to streams and are not handled here.
+// event re-logs an agent log event under the Remote's label, or hands a
+// progress event to the callback of its pending send.
 func (r *Remote) event(ev *Event) {
-	if ev.Kind != EventLog {
-		return
+	switch ev.Kind {
+	case EventLog:
+		r.log.Log(context.Background(), eventLevel(ev.Level), ev.Msg, logx.KeyHost, r.label)
+	case EventProgress:
+		r.mu.Lock()
+		p := r.progress[ev.RequestID]
+		r.mu.Unlock()
+		p.report(ev.Bytes)
 	}
-	r.log.Log(context.Background(), eventLevel(ev.Level), ev.Msg, logx.KeyHost, r.label)
 }
 
 // eventLevel maps an Event level name to its slog level; ERROR is critical.
@@ -187,8 +195,9 @@ func (r *Remote) lost(cause error) error {
 }
 
 // request sends a request and returns its id and the channel its response
-// will arrive on.
-func (r *Remote) request(method string, params any) (uint64, chan Message, error) {
+// will arrive on. progress, when non-nil, receives the request's progress
+// events until the response or forget.
+func (r *Remote) request(method string, params any, progress func(int64)) (uint64, chan Message, error) {
 	m := Message{ID: r.nextID.Add(1), Method: method}
 	if params != nil {
 		raw, err := json.Marshal(params)
@@ -204,6 +213,9 @@ func (r *Remote) request(method string, params any) (uint64, chan Message, error
 		return 0, nil, r.lost(nil)
 	}
 	r.pending[m.ID] = ch
+	if progress != nil {
+		r.progress[m.ID] = &progressSink{fn: progress}
+	}
 	r.mu.Unlock()
 	if err := r.codec.Write(m); err != nil {
 		r.forget(m.ID)
@@ -212,10 +224,16 @@ func (r *Remote) request(method string, params any) (uint64, chan Message, error
 	return m.ID, ch, nil
 }
 
+// forget stops waiting for the response and progress of request id.
 func (r *Remote) forget(id uint64) {
 	r.mu.Lock()
+	p := r.progress[id]
 	delete(r.pending, id)
+	delete(r.progress, id)
 	r.mu.Unlock()
+	if p != nil {
+		p.stop()
+	}
 }
 
 // decode turns a response into the call's error, or decodes its result
@@ -235,12 +253,13 @@ func (r *Remote) decode(method string, m Message, result any) error {
 
 // call runs one request and decodes its result into result. When ctx ends
 // first, the agent is told to cancel the request and given cancelGrace to
-// answer, and the call returns ctx's error.
+// answer, and the call returns ctx's error (unless the response was already
+// in).
 func (r *Remote) call(ctx context.Context, method string, params, result any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	id, ch, err := r.request(method, params)
+	id, ch, err := r.request(method, params, nil)
 	if err != nil {
 		return err
 	}
@@ -249,15 +268,33 @@ func (r *Remote) call(ctx context.Context, method string, params, result any) er
 		return r.decode(method, m, result)
 	case <-r.done:
 		// The response may have been routed just before the reader stopped.
-		select {
-		case m := <-ch:
+		if m, ok := ready(ch); ok {
 			return r.decode(method, m, result)
-		default:
-			return r.lost(nil)
 		}
+		return r.lost(nil)
 	case <-ctx.Done():
+		if m, ok := ready(ch); ok {
+			return r.decode(method, m, result)
+		}
 	}
+	r.cancelRequest(id, ch)
+	return ctx.Err()
+}
 
+// ready returns the response on ch if it has already arrived.
+func ready(ch chan Message) (Message, bool) {
+	select {
+	case m := <-ch:
+		return m, true
+	default:
+		return Message{}, false
+	}
+}
+
+// cancelRequest tells the agent to cancel request id, waits up to
+// cancelGrace for its response (or the end of the connection) and forgets
+// the request.
+func (r *Remote) cancelRequest(id uint64, ch chan Message) {
 	cancel := Message{ID: r.nextID.Add(1), Method: MethodCancel}
 	cancel.Params, _ = json.Marshal(CancelParams{ID: id})
 	// Nobody waits for the cancel's own response (the reader drops it), and
@@ -271,7 +308,6 @@ func (r *Remote) call(ctx context.Context, method string, params, result any) er
 	case <-grace.C:
 	}
 	r.forget(id)
-	return ctx.Err()
 }
 
 // query is call for a method with a result of type T.
@@ -286,7 +322,7 @@ func query[T any](ctx context.Context, r *Remote, method string, params any) (T,
 // ErrConnectionLost.
 func (r *Remote) Close() error {
 	r.closeOnce.Do(func() {
-		if _, ch, err := r.request(MethodShutdown, nil); err == nil {
+		if _, ch, err := r.request(MethodShutdown, nil, nil); err == nil {
 			t := time.NewTimer(shutdownWait)
 			select {
 			case <-ch:
@@ -387,14 +423,4 @@ func (r *Remote) ReceiveBusy(ctx context.Context, datasets []string) (map[string
 // Allow returns the raw output of `zfs allow ds`.
 func (r *Remote) Allow(ctx context.Context, ds string) (string, error) {
 	return query[string](ctx, r, MethodAllow, DatasetParams{Dataset: ds})
-}
-
-// Send is not supported over the protocol yet.
-func (r *Remote) Send(context.Context, zfs.SendSpec, endpoint.SendOpts, io.Writer) error {
-	return fmt.Errorf("%s: send: %w", r.label, errors.ErrUnsupported)
-}
-
-// Receive is not supported over the protocol yet.
-func (r *Remote) Receive(context.Context, zfs.RecvSpec, stream.Codec, io.Reader) error {
-	return fmt.Errorf("%s: receive: %w", r.label, errors.ErrUnsupported)
 }

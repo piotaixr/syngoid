@@ -42,6 +42,7 @@ type testEP struct {
 	started   chan struct{} // receives once per blocked Exists
 	cancelled chan struct{} // receives once per blocked Exists whose ctx ended
 	release   chan struct{} // closed to let "slow/ds" return after its ctx ended
+	payloads  chan []byte   // receives the whole input of every Receive
 }
 
 func (e *testEP) Exists(ctx context.Context, ds string) (bool, error) {
@@ -100,6 +101,7 @@ func newHarness(t *testing.T, tweak func(*Config)) *harness {
 		started:   make(chan struct{}, 8),
 		cancelled: make(chan struct{}, 8),
 		release:   make(chan struct{}),
+		payloads:  make(chan []byte, 8),
 	}
 	h.cfg = Config{
 		NewEndpoint: func(_ bool, l *slog.Logger) endpoint.Endpoint { h.ep.log = l; return h.ep },
@@ -464,8 +466,8 @@ func TestServeRejectsUndecodableParams(t *testing.T) {
 func TestServeUnknownMethod(t *testing.T) {
 	h := newHarness(t, nil)
 	h.hello(rpc.Hello{Protocol: 1})
-	// send and receive are served by a later task; hello only once.
-	for _, method := range []string{"frobnicate", rpc.MethodSend, rpc.MethodReceive, rpc.MethodHello} {
+	// hello is accepted only once.
+	for _, method := range []string{"frobnicate", rpc.MethodHello} {
 		m := h.call(method, nil)
 		if m.Error == nil || m.Error.Code != rpc.CodeUnknownMethod {
 			t.Errorf("%s: response = %+v, want %q", method, m, rpc.CodeUnknownMethod)
