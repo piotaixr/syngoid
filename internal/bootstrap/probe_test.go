@@ -78,6 +78,27 @@ func TestPushCommandAtomic(t *testing.T) {
 	}
 }
 
+func TestPushCommandTightensExistingDir(t *testing.T) {
+	tr := newShTransport(t)
+	dir := filepath.Join(tr.home, "loose")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Run(context.Background(), PushCommand(dir, 3), strings.NewReader("bin")); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Errorf("mode of the existing agent dir after a push = %v, want 0700", fi.Mode().Perm())
+	}
+}
+
 func TestPushCommandShortInput(t *testing.T) {
 	tr := newShTransport(t)
 	dir := filepath.Join(tr.home, "d")

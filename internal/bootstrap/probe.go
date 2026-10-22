@@ -21,10 +21,10 @@ const probeScript = `D=$1; case $D in "~/"*) D=$HOME/${D#"~/"};; esac; ` +
 	`if [ -x "$D/syngoid" ]; then echo yes; else echo no; fi`
 
 // pushScript atomically installs its stdin as $1/syngoid, mode 0700, in a
-// 0700 directory, only when exactly $2 bytes arrived: a push cut short ends
+// 0700 directory (also when it already existed with another mode), only when exactly $2 bytes arrived: a push cut short ends
 // cat with a plain EOF. On failure the temporary file is removed. The
 // unquoted $n drops the padding BSD wc prints.
-const pushScript = `umask 077; T="$1/.syngoid.tmp.$$"; mkdir -p "$1" && cat > "$T" && n=$(wc -c < "$T") && [ $n -eq "$2" ] && chmod 700 "$T" && mv -f "$T" "$1/syngoid" || { rm -f "$T"; exit 1; }`
+const pushScript = `umask 077; T="$1/.syngoid.tmp.$$"; mkdir -p "$1" && chmod 700 "$1" && cat > "$T" && n=$(wc -c < "$T") && [ $n -eq "$2" ] && chmod 700 "$T" && mv -f "$T" "$1/syngoid" || { rm -f "$T"; exit 1; }`
 
 // ProbeCommand returns the remote command probing the platform and the bin
 // dir, which may start with "~/".

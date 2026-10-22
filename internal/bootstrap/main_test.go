@@ -106,6 +106,10 @@ func (s *shTransport) Run(ctx context.Context, cmd string, stdin io.Reader) ([]b
 	}
 	c := exec.CommandContext(ctx, "sh", "-c", cmd)
 	c.Env = s.env()
+	// Like sshx: a group of its own, killed whole. A shell that does not
+	// exec its last command in place (dash) leaves it as a grandchild.
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
 	c.Stdin = stdin
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
@@ -119,6 +123,7 @@ func (s *shTransport) Run(ctx context.Context, cmd string, stdin io.Reader) ([]b
 func (s *shTransport) Spawn(_ context.Context, cmd string) (Proc, error) {
 	c := exec.Command("sh", "-c", cmd)
 	c.Env = s.env(testAgentEnv + "=1")
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	in, err := c.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -154,14 +159,15 @@ func (p *shProc) Read(b []byte) (int, error)  { return p.out.Read(b) }
 func (p *shProc) Write(b []byte) (int, error) { return p.in.Write(b) }
 func (p *shProc) Stderr() string              { return p.stderr.String() }
 
-// Close closes stdin and waits for the process, killing it after p.wait.
+// Close closes stdin and waits for the process, killing its process group
+// after p.wait.
 func (p *shProc) Close() error {
 	p.once.Do(func() {
 		_ = p.in.Close()
 		select {
 		case <-p.done:
 		case <-time.After(p.wait):
-			_ = p.cmd.Process.Kill()
+			_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
 			<-p.done
 		}
 	})
