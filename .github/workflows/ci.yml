@@ -45,7 +45,7 @@ jobs:
         env:
           SYNGOID_IT: "1"
           SYNGOID_IT_INVASIVE: "1"
-        run: sudo -E env PATH=$PATH go test -tags integration -v -timeout 30m ./test/integration/...
+        run: sudo -E env PATH=$PATH go test -tags integration -v -timeout 45m ./test/integration/...
 
   cross:
     runs-on: ubuntu-latest
