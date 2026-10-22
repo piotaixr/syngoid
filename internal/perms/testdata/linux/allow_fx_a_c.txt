@@ -1,0 +1,21 @@
+---- Permissions on syngoidfx/fx/a/c ---------------------------------
+Local permissions:
+	user sgxuser rename
+---- Permissions on syngoidfx/fx/a -----------------------------------
+Permission sets:
+	@set1 create,mount,receive
+Create time permissions:
+	create,mount,snapshot
+Local permissions:
+	user sgxuser release
+Descendent permissions:
+	group sgxgrp destroy
+Local+Descendent permissions:
+	user sgxuser @set1,hold,snapshot
+	group sgxgrp send
+	everyone bookmark
+---- Permissions on syngoidfx ----------------------------------------
+Permission sets:
+	@poolset create,mount
+Local+Descendent permissions:
+	group sgxgrp mount

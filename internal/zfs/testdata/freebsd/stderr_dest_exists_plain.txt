@@ -1,0 +1,2 @@
+cannot receive new filesystem stream: destination has snapshots (eg. syngoidfx/exist@r1)
+must destroy them to overwrite it

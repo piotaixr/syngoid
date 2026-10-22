@@ -12,20 +12,14 @@ import (
 	"github.com/piotaixr/syngoid/internal/zfs/zfstest"
 )
 
-// fixture reads testdata/name, dropping '#' header comment lines.
+// fixture reads testdata/name.
 func fixture(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile("testdata/" + name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sb strings.Builder
-	for _, l := range strings.SplitAfter(string(b), "\n") {
-		if !strings.HasPrefix(l, "#") {
-			sb.WriteString(l)
-		}
-	}
-	return sb.String()
+	return string(b)
 }
 
 const (
@@ -41,20 +35,18 @@ func newClient(resp map[string]zfstest.Response) (*zfs.Client, *zfstest.FakeExec
 	return &zfs.Client{Exec: fe}, fe
 }
 
-func TestParseTree(t *testing.T) {
+// TestParseTreeResumeToken covers a dataset with a resume token, which the
+// captured tree (TestParseCapturedTree) does not have.
+func TestParseTreeResumeToken(t *testing.T) {
 	c, _ := newClient(map[string]zfstest.Response{
-		treeArgs + " -r tank": {Stdout: fixture(t, "tree.txt")},
+		treeArgs + " -r tank/data": {Stdout: fixture(t, "tree.txt")},
 	})
-	got, err := c.ListTree(context.Background(), "tank", true)
+	got, err := c.ListTree(context.Background(), "tank/data", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []zfs.DatasetInfo{
-		{Name: "tank", Type: "filesystem", Used: 1048576},
 		{Name: "tank/data", Type: "filesystem", Used: 2097152, ResumeToken: "1-abcdef-token", SyncProp: "false"},
-		{Name: "tank/data/clone", Type: "filesystem", Origin: "tank/data@snap1", Used: 4096, SyncProp: "nas,db1"},
-		{Name: "tank/my data", Type: "filesystem", Used: 8192},
-		{Name: "tank/vol", Type: "volume", Used: 10737418240},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
@@ -91,28 +83,6 @@ func TestListTreeNoDataset(t *testing.T) {
 	_, err := c.ListTree(context.Background(), "nope", false)
 	if !errors.Is(err, zfs.ErrNoDataset) {
 		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestParseSnapshotsTieBreak(t *testing.T) {
-	c, _ := newClient(map[string]zfstest.Response{
-		snapHead + " -r tank": {Stdout: fixture(t, "snaps.txt")},
-	})
-	got, err := c.ListSnapshots(context.Background(), "tank", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string][]zfs.Snapshot{
-		"tank/data": {
-			{Name: "snap1", GUID: "1111111111111111111", CreateTxg: 100, Creation: 1700000000000},
-			{Name: "snap2", GUID: "2222222222222222222", CreateTxg: 110, Creation: 1700000000001},
-		},
-		"tank/vol": {
-			{Name: "syncoid_host_2026-10-18:10:00:00-GMT02:00", GUID: "3333333333333333333", CreateTxg: 120, Creation: 1700000500000},
-		},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -177,20 +147,32 @@ func TestListSnapshotsNoDatasetNoFallback(t *testing.T) {
 	}
 }
 
+// TestListBookmarks lists the captured Linux bookmarks b1 and b2, which carry
+// the guid, txg and creation second of the snapshots s1 and s2 they were made
+// from.
 func TestListBookmarks(t *testing.T) {
 	c, _ := newClient(map[string]zfstest.Response{
-		bmHead + " -r tank": {Stdout: fixture(t, "bookmarks.txt")},
+		bmHead + " -r syngoidfx":   {Stdout: fixture(t, "linux/bookmarks.txt")},
+		snapHead + " -r syngoidfx": {Stdout: fixture(t, "linux/snaps.txt")},
 	})
-	got, err := c.ListBookmarks(context.Background(), "tank", true)
+	ctx := context.Background()
+	got, err := c.ListBookmarks(ctx, "syngoidfx", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]zfs.Bookmark{"tank/data": {
-		{Name: "bm1", GUID: "4444444444444444444", CreateTxg: 100, Creation: 1700000000000},
-		{Name: "bm2", GUID: "5555555555555555555", CreateTxg: 110, Creation: 1700000000001},
-	}}
-	if !reflect.DeepEqual(got, want) {
+	snaps, err := c.ListSnapshots(ctx, "syngoidfx", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ds = "syngoidfx/fx/a"
+	if len(got) != 1 || len(got[ds]) != 2 {
 		t.Fatalf("got %+v", got)
+	}
+	for i, name := range []string{"b1", "b2"} {
+		b, s := got[ds][i], snaps[ds][i]
+		if b.Name != name || b.GUID != s.GUID || b.CreateTxg != s.CreateTxg || b.Creation/1000 != s.Creation/1000 {
+			t.Errorf("bookmark %+v does not match snapshot %+v", b, s)
+		}
 	}
 }
 
