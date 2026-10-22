@@ -178,8 +178,27 @@ dd if=/dev/urandom of="$alt/$fx/a/file1" bs=1024 count=4096 2>/dev/null
 zfs snapshot "$fx/a@s1"
 sleep 1
 dd if=/dev/urandom of="$alt/$fx/a/file2" bs=1024 count=1024 2>/dev/null
-# One command, one txg: s2 and s3 get the same creation second.
-zfs snapshot "$fx/a@s2" "$fx/a@s3"
+# s2 and s3 want the same creation second (the tie-break fixture). zfs refuses
+# two snapshots of one filesystem in a single command, so take them back to
+# back and retake both when a second boundary fell between them. Not fatal if
+# it never works out.
+same_second=no
+n=0
+while [ "$n" -lt 10 ]; do
+	n=$((n + 1))
+	zfs snapshot "$fx/a@s2"
+	zfs snapshot "$fx/a@s3"
+	c2=$(zfs get -Hp -o value creation "$fx/a@s2")
+	c3=$(zfs get -Hp -o value creation "$fx/a@s3")
+	if [ "$c2" = "$c3" ]; then
+		same_second=yes
+		break
+	fi
+	[ "$n" -lt 10 ] || break # keep the last pair
+	zfs destroy "$fx/a@s3"
+	zfs destroy "$fx/a@s2"
+done
+echo "same-second snapshot pair fx/a@s2, fx/a@s3: $same_second (attempts: $n)" >>"$out/commands.txt"
 zfs clone -o syncoid:sync=nas,db1 "$fx/a@s1" "$fx/a/c"
 zfs bookmark "$fx/a@s1" "$fx/a#b1"
 zfs bookmark "$fx/a@s2" "$fx/a#b2"
