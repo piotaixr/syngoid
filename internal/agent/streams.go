@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"time"
 
@@ -226,7 +227,27 @@ func (s *server) receive(ctx context.Context, id uint64, p rpc.ReceiveParams) er
 	defer ds.close()
 	stop := context.AfterFunc(ctx, ds.unblock)
 	defer stop()
-	return s.ep.Receive(ctx, p.Spec, p.Codec, ds.r)
+	return s.ep.Receive(ctx, p.Spec, p.Codec, &sessionReader{r: ds.r, sess: s.sess})
+}
+
+// errSessionLost replaces the EOF of a data stream whose session is gone.
+var errSessionLost = errors.New("connection to initiator lost")
+
+// sessionReader reads a data stream, turning an EOF seen once the session is
+// closed into errSessionLost: yamux ends every stream of a dying session
+// with a plain io.EOF, which zfs receive must not take for the end of its
+// stream.
+type sessionReader struct {
+	r    io.Reader
+	sess *yamux.Session
+}
+
+func (r *sessionReader) Read(b []byte) (int, error) {
+	n, err := r.r.Read(b)
+	if err == io.EOF && r.sess.IsClosed() {
+		err = errSessionLost
+	}
+	return n, err
 }
 
 // progressEvent sends a progress event for request id. A failed write

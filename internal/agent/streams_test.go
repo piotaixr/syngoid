@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -18,8 +19,18 @@ import (
 )
 
 // Receive hands the whole input to payloads, then lets the fake receive it.
+// Entering signals receiving, and the read error (nil at EOF) goes to
+// readErrs, each when the channel has room.
 func (e *testEP) Receive(ctx context.Context, s zfs.RecvSpec, codec stream.Codec, r io.Reader) error {
+	select {
+	case e.receiving <- struct{}{}:
+	default:
+	}
 	data, err := io.ReadAll(r)
+	select {
+	case e.readErrs <- err:
+	default:
+	}
 	if err != nil {
 		return err
 	}
@@ -239,4 +250,31 @@ func TestAgentClosesStrayDataStreams(t *testing.T) {
 	}
 	// Other requests are unaffected.
 	h.ok(rpc.MethodExists, rpc.DatasetParams{Dataset: "pool/a"})
+}
+
+func TestAgentReceiveSeesSessionLoss(t *testing.T) {
+	// yamux ends a stream of a dying session with a plain EOF; zfs receive
+	// must not take that for the end of its stream.
+	h, offers := newOfferHarness(t, dataStreamTimeout)
+	h.hello(matchingHello())
+	h.world.Create("pool", "")
+	id := h.send(rpc.MethodReceive, rpc.ReceiveParams{Spec: zfs.RecvSpec{Dataset: "pool/a"}, Codec: stream.None})
+	h.openData(id, []byte("the first part of a stream")) // never closed
+	if o := awaitOffer(t, offers, id); !o.taken {
+		t.Fatalf("stream offer = %+v, want it taken", o)
+	}
+	select {
+	case <-h.ep.receiving:
+	case <-time.After(wait):
+		t.Fatal("the receive did not start")
+	}
+	_ = h.cli.Close()
+	select {
+	case err := <-h.ep.readErrs:
+		if err == nil || errors.Is(err, io.EOF) {
+			t.Errorf("receive read error = %v, want a non-EOF error", err)
+		}
+	case <-time.After(wait):
+		t.Fatal("receive still reading after the session closed")
+	}
 }

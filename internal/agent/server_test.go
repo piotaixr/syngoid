@@ -43,6 +43,8 @@ type testEP struct {
 	cancelled chan struct{} // receives once per blocked Exists whose ctx ended
 	release   chan struct{} // closed to let "slow/ds" return after its ctx ended
 	payloads  chan []byte   // receives the whole input of every Receive
+	receiving chan struct{} // receives once per Receive, on entry
+	readErrs  chan error    // receives the input's read error of every Receive
 }
 
 func (e *testEP) Exists(ctx context.Context, ds string) (bool, error) {
@@ -102,6 +104,8 @@ func newHarness(t *testing.T, tweak func(*Config)) *harness {
 		cancelled: make(chan struct{}, 8),
 		release:   make(chan struct{}),
 		payloads:  make(chan []byte, 8),
+		receiving: make(chan struct{}, 8),
+		readErrs:  make(chan error, 8),
 	}
 	h.cfg = Config{
 		NewEndpoint: func(_ bool, l *slog.Logger) endpoint.Endpoint { h.ep.log = l; return h.ep },
