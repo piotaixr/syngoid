@@ -163,6 +163,18 @@ func TestConnectHandshakeTimeout(t *testing.T) {
 	}
 }
 
+func TestConnectRejectsRelativeHome(t *testing.T) {
+	tr := newShTransport(t)
+	tr.home = ""
+	_, err := Connect(context.Background(), tr, Options{})
+	if err == nil || !strings.Contains(err.Error(), "not absolute; pass an absolute --remote-bin-dir") {
+		t.Errorf("Connect error = %v", err)
+	}
+	if n := tr.pushes.Load(); n != 0 {
+		t.Errorf("pushes = %d", n)
+	}
+}
+
 func TestConnectRejectsBadRemoteDir(t *testing.T) {
 	tr := newShTransport(t)
 	_, err := Connect(context.Background(), tr, Options{RemoteBinDir: "/a\nb", Log: slog.New(slog.DiscardHandler)})

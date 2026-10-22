@@ -53,7 +53,7 @@ func TestPushCommandAtomic(t *testing.T) {
 	if _, err := rand.Read(data); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tr.Run(context.Background(), PushCommand(dir), bytes.NewReader(data)); err != nil {
+	if _, err := tr.Run(context.Background(), PushCommand(dir, int64(len(data))), bytes.NewReader(data)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "syngoid"))
@@ -78,6 +78,22 @@ func TestPushCommandAtomic(t *testing.T) {
 	}
 }
 
+func TestPushCommandShortInput(t *testing.T) {
+	tr := newShTransport(t)
+	dir := filepath.Join(tr.home, "d")
+	for name, size := range map[string]int64{"short": 1 << 20, "long": 1} {
+		_, err := tr.Run(context.Background(), PushCommand(dir, size), strings.NewReader("only a few bytes"))
+		if err == nil {
+			t.Errorf("%s: push of %d bytes from a 16-byte stdin succeeded", name, size)
+		}
+		left, _ := filepath.Glob(filepath.Join(dir, "*"))
+		hidden, _ := filepath.Glob(filepath.Join(dir, ".syngoid.tmp.*"))
+		if len(left)+len(hidden) != 0 {
+			t.Errorf("%s: files left after a failed push: %v %v", name, left, hidden)
+		}
+	}
+}
+
 func TestPushCommandOddDir(t *testing.T) {
 	tr := newShTransport(t)
 	dir := filepath.Join(tr.home, "it's a dir")
@@ -85,7 +101,7 @@ func TestPushCommandOddDir(t *testing.T) {
 		t.Fatalf("probe = %+v, want Dir %q, not executable", pr, dir)
 	}
 	script := "#!/bin/sh\necho \"ran $1\"\n"
-	if _, err := tr.Run(context.Background(), PushCommand(dir), strings.NewReader(script)); err != nil {
+	if _, err := tr.Run(context.Background(), PushCommand(dir, int64(len(script))), strings.NewReader(script)); err != nil {
 		t.Fatal(err)
 	}
 	if pr := probe(t, tr, dir); !pr.Executable {
@@ -136,7 +152,7 @@ func TestCheckRemoteDir(t *testing.T) {
 			t.Errorf("checkRemoteDir(%q) = %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "/a\nb", "/a\x00b", "/a\tb", "/café", "/a\x7fb"} {
+	for _, bad := range []string{"", "/a\nb", "/a\x00b", "/a\tb", "/café", "/a\x7fb", `/a\b`} {
 		err := checkRemoteDir(bad)
 		if err == nil {
 			t.Errorf("checkRemoteDir(%q) succeeded", bad)
@@ -174,7 +190,8 @@ func TestCommandsUnderCsh(t *testing.T) {
 	if want := home + "/it's a dir"; pr.Dir != want {
 		t.Fatalf("Dir = %q, want %q", pr.Dir, want)
 	}
-	run(PushCommand(pr.Dir), "#!/bin/sh\necho \"ran $1\"\n")
+	script := "#!/bin/sh\necho \"ran $1\"\n"
+	run(PushCommand(pr.Dir, int64(len(script))), script)
 	if out := run(ServeCommand(pr.Dir), ""); out != "ran serve\n" {
 		t.Errorf("serve output = %q", out)
 	}

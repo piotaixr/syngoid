@@ -15,14 +15,28 @@ import (
 )
 
 // fakeMaster is a MasterTransport over an shTransport that counts Start
-// and Close.
+// and Close; onClose, when set, runs in Close.
 type fakeMaster struct {
 	*shTransport
 	starts, closes atomic.Int32
+	onClose        func()
 }
 
 func (m *fakeMaster) Start(context.Context) error { m.starts.Add(1); return nil }
-func (m *fakeMaster) Close() error                { m.closes.Add(1); return nil }
+
+func (m *fakeMaster) Close() error {
+	m.closes.Add(1)
+	if m.onClose != nil {
+		m.onClose()
+	}
+	return nil
+}
+
+// closed reports whether r's connection is gone.
+func closed(ctx context.Context, r *rpc.Remote) bool {
+	_, err := r.Info(ctx)
+	return errors.Is(err, rpc.ErrConnectionLost)
+}
 
 func TestPoolReuse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -56,16 +70,24 @@ func TestPoolReuse(t *testing.T) {
 	if r3 == r1 {
 		t.Error("sudo session reused the non-sudo one")
 	}
-	if len(masters) != 1 || masters[0].starts.Load() != 1 {
-		t.Fatalf("masters = %d, starts = %d; want 1 started master", len(masters), masters[0].starts.Load())
+	if len(masters) != 1 {
+		t.Fatalf("masters = %d, want 1", len(masters))
+	}
+	if n := masters[0].starts.Load(); n != 1 {
+		t.Fatalf("starts = %d, want 1", n)
 	}
 
+	remotesClosedFirst := false
+	masters[0].onClose = func() { remotesClosedFirst = closed(ctx, r1) && closed(ctx, r3) }
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if !remotesClosedFirst {
+		t.Error("a master was closed before the sessions")
+	}
 	for _, r := range []*rpc.Remote{r1, r3} {
-		if _, err := r.Info(ctx); !errors.Is(err, rpc.ErrConnectionLost) {
-			t.Errorf("Info after Close = %v, want ErrConnectionLost", err)
+		if !closed(ctx, r) {
+			t.Error("session still usable after Close")
 		}
 	}
 	if n := masters[0].closes.Load(); n != 1 {
