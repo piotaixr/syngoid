@@ -205,7 +205,7 @@ type Endpoint interface {
     Release(ctx, tag, snapshot string) error
     Bookmark(ctx, snapshot, bookmark string) error
     AbortResume(ctx, dataset string) error             // zfs receive -A
-    ReceiveBusy(ctx, dataset string) (bool, error)     // ps -Ao args= scan
+    ReceiveBusy(ctx, dataset string) (bool, error)     // ps -wwAo args= scan
     SendEstimate(ctx, SendSpec) (int64, error)         // zfs send -nvP
     Send(ctx, SendSpec, Codec) (Stream, error)         // stream encoded with Codec
     Receive(ctx, RecvSpec, Codec, io.Reader) (RecvResult, error)
@@ -711,4 +711,8 @@ FreeBSD port, moving data streams to separate SSH sessions.
    16 MiB by more than 20 % on both measurements; in-process it is slower, and the loopback number is pending).
 3. `zfs allow` output format differences across Linux/FreeBSD/illumos — captured as fixtures before writing the
    parser.
-4. `ps -Ao args=` availability and format on illumos (fallback: `ps -eo args`) — captured as fixtures.
+4. `ps` argument listing across platforms — captured as fixtures (with a 218-character receive target).
+   `ReceiveBusy` tries `ps -wwAo args=` (without a tty FreeBSD ps cuts lines at 79 columns unless `-ww`), then
+   `ps -Ao args=`, then `ps -eo args` (header dropped). *Known limitation:* illumos ps has no `-w` and keeps only
+   the first 80 bytes of the arguments, so a `zfs receive` into a long target name is not seen there; a second
+   receive then fails critically instead of being skipped as busy.

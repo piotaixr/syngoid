@@ -93,7 +93,7 @@ func TestLocalAllow(t *testing.T) {
 
 func TestLocalReceiveBusy(t *testing.T) {
 	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
-		"ps -Ao args=": {Stdout: "/sbin/init\nzfs receive -s -F tank/b\nzfs recv tank/c/d\nsshd: foo\n"},
+		"ps -wwAo args=": {Stdout: "/sbin/init\nzfs receive -s -F tank/b\nzfs recv tank/c/d\nsshd: foo\n"},
 	}}
 	got, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/b", "tank/c", "tank/c/d"})
 	if err != nil {
@@ -114,19 +114,61 @@ func TestLocalReceiveBusy(t *testing.T) {
 	}
 }
 
+func TestLocalReceiveBusyLongLine(t *testing.T) {
+	// FreeBSD ps without a tty cuts lines at 79 columns unless -ww: the
+	// unlimited-width form comes first, so a long receive line is seen whole.
+	ds := "tank/" + strings.Repeat("long-component/", 15) + "leaf"
+	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
+		"ps -wwAo args=": {Stdout: "zfs receive -s -F " + ds + "\n"},
+		"ps -Ao args=":   {Stdout: ("zfs receive -s -F " + ds)[:79] + "\n"},
+	}}
+	got, err := newLocal(fe).ReceiveBusy(context.Background(), []string{ds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[ds] {
+		t.Errorf("long receive line missed: %v", got)
+	}
+	if len(fe.Calls) != 1 || strings.Join(fe.Calls[0], " ") != "ps -wwAo args=" {
+		t.Errorf("calls = %q, want only ps -wwAo args=", fe.Calls)
+	}
+}
+
 func TestLocalReceiveBusyError(t *testing.T) {
 	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
-		"ps -Ao args=": {Stderr: "x\n", Exit: 1},
+		"ps -wwAo args=": {Stderr: "x\n", Exit: 1},
+		"ps -Ao args=":   {Stderr: "x\n", Exit: 1},
+		"ps -eo args":    {Stderr: "x\n", Exit: 1},
 	}}
 	if _, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/b"}); err == nil {
 		t.Fatal("want error")
 	}
 }
 
+func TestLocalReceiveBusyPsFallbackNoWide(t *testing.T) {
+	// illumos ps has no -w: the second form, still without a header.
+	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
+		"ps -wwAo args=": {Stderr: "ps: illegal option -- w\n", Exit: 2},
+		"ps -Ao args=":   {Stdout: "zfs receive -s tank/b\n"},
+	}}
+	got, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/b", "tank/c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"tank/b": true, "tank/c": false}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ReceiveBusy = %v, want %v", got, want)
+	}
+	if len(fe.Calls) != 2 {
+		t.Errorf("calls = %q, want two", fe.Calls)
+	}
+}
+
 func TestLocalReceiveBusyPsFallback(t *testing.T) {
 	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
-		"ps -Ao args=": {Stderr: "ps: illegal option -- o\n", Exit: 1},
-		"ps -eo args":  {Stdout: "ARGS\nzfs receive -s tank/b\n"},
+		"ps -wwAo args=": {Stderr: "ps: illegal option -- w\n", Exit: 1},
+		"ps -Ao args=":   {Stderr: "ps: illegal option -- o\n", Exit: 1},
+		"ps -eo args":    {Stdout: "ARGS\nzfs receive -s tank/b\n"},
 	}}
 	got, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/b", "tank/c"})
 	if err != nil {
@@ -138,16 +180,17 @@ func TestLocalReceiveBusyPsFallback(t *testing.T) {
 	}
 }
 
-func TestLocalReceiveBusyPsFallbackBothFail(t *testing.T) {
+func TestLocalReceiveBusyPsFallbackAllFail(t *testing.T) {
 	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
-		"ps -Ao args=": {Stderr: "first form failed\n", Exit: 1},
-		"ps -eo args":  {Stderr: "second form failed\n", Exit: 1},
+		"ps -wwAo args=": {Stderr: "first form failed\n", Exit: 1},
+		"ps -Ao args=":   {Stderr: "second form failed\n", Exit: 1},
+		"ps -eo args":    {Stderr: "third form failed\n", Exit: 1},
 	}}
 	_, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/b"})
 	if err == nil {
 		t.Fatal("want error")
 	}
-	for _, want := range []string{"first form failed", "second form failed"} {
+	for _, want := range []string{"first form failed", "second form failed", "third form failed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err, want)
 		}
@@ -158,8 +201,9 @@ func TestLocalReceiveBusyPsFallbackDropsHeader(t *testing.T) {
 	// The header is the first line whatever it says: a dataset named like it
 	// must not be reported busy.
 	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
-		"ps -Ao args=": {Exit: 1},
-		"ps -eo args":  {Stdout: "zfs receive tank/h\n/sbin/init\n"},
+		"ps -wwAo args=": {Exit: 1},
+		"ps -Ao args=":   {Exit: 1},
+		"ps -eo args":    {Stdout: "zfs receive tank/h\n/sbin/init\n"},
 	}}
 	got, err := newLocal(fe).ReceiveBusy(context.Background(), []string{"tank/h"})
 	if err != nil {
@@ -167,6 +211,20 @@ func TestLocalReceiveBusyPsFallbackDropsHeader(t *testing.T) {
 	}
 	if got["tank/h"] {
 		t.Errorf("header line was scanned: %v", got)
+	}
+}
+
+func TestLocalReceiveBusyCancelStopsFallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fe := &zfstest.FakeExec{Responses: map[string]zfstest.Response{
+		"ps -wwAo args=": {Block: true},
+	}}
+	if _, err := newLocal(fe).ReceiveBusy(ctx, []string{"tank/b"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if len(fe.Calls) != 1 {
+		t.Errorf("calls after cancel = %q, want one", fe.Calls)
 	}
 }
 
