@@ -21,10 +21,14 @@ var connWriteTimeout = 2 * time.Minute
 // muxConfig returns the yamux configuration shared by both ends. Keepalive
 // is off (ssh already detects a dead link) and logging is discarded, as the
 // agent must never write to its stderr once the mux is up.
-func muxConfig() *yamux.Config {
+func muxConfig() *yamux.Config { return muxConfigWindow(MaxStreamWindow) }
+
+// muxConfigWindow is muxConfig with the per-stream receive window set to
+// window bytes; the benchmark uses it to compare window sizes.
+func muxConfigWindow(window uint32) *yamux.Config {
 	cfg := yamux.DefaultConfig()
 	cfg.EnableKeepAlive = false
-	cfg.MaxStreamWindowSize = MaxStreamWindow
+	cfg.MaxStreamWindowSize = window
 	cfg.ConnectionWriteTimeout = connWriteTimeout
 	cfg.LogOutput = io.Discard
 	return cfg

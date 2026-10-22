@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prepares an Ubuntu host for the integration suite (test/integration):
 # installs the ZFS tools, creates the file-backed pools syngoid-src and
-# syngoid-dst (1 GiB sparse files) and the unprivileged user syngoid-it used
+# syngoid-dst (4 GiB sparse files) and the unprivileged user syngoid-it used
 # by the delegation tests, and installs Perl syncoid 2.2.0 (/usr/local/bin/syncoid)
 # for the interoperability tests. For the remote tests it also sets up
 # key-based ssh from root to syngoid-it@localhost (known_hosts included, no
@@ -59,7 +59,7 @@ for pool in "${pools[@]}"; do
 		echo "pool $pool already exists"
 		continue
 	fi
-	truncate -s 1G "$img_dir/$pool.img"
+	truncate -s 4G "$img_dir/$pool.img"
 	zpool create -f "$pool" "$img_dir/$pool.img"
 done
 

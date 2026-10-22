@@ -694,6 +694,16 @@ FreeBSD port, moving data streams to separate SSH sessions.
    incremental mode takes temporary holds), so §6.2 now requires `hold` unless `--no-stream`.
    `TestITReceiveForcePermissions` and `TestITPreflightPrintsWorkingGrant` pin both outcomes.
 2. yamux throughput through SSH on a 10 GbE-class link with the 16 MiB window — benchmark; tune window size.
+   *In-process result:* `BenchmarkMuxThroughput` (`internal/rpc/mux_bench_test.go`: 256 MiB through one stream,
+   `ChunkWriter`, two `os.Pipe` pairs; Apple M4 Max, go1.27.1 darwin/arm64, `-benchtime 5x`, two runs) gives
+   4.7-4.8 GB/s with a 4 MiB window, 4.4-4.5 GB/s with 16 MiB and 4.0 GB/s with 64 MiB. Pipes have no latency, so the
+   window never limits the stream there and a larger one only costs a little more buffering; the mux itself is far
+   faster than any link in scope. *CI loopback result:* `TestITRemoteThroughput` (1 GiB through `syngoid
+   --compress=none` against a bare `zfs send | ssh sudo -n zfs receive`, fails below 50 % of the baseline) logs a
+   `THROUGHPUT syngoid=<MB/s> baseline=<MB/s>` line; to be appended here from the first integration run's log.
+   Loopback with file-backed pools is not a 10 GbE link, so neither number says anything about a real
+   bandwidth-delay product. Decision: `MaxStreamWindow` stays 16 MiB (the rule for changing it: 64 MiB beating
+   16 MiB by more than 20 % on both measurements; in-process it is slower, and the loopback number is pending).
 3. `zfs allow` output format differences across Linux/FreeBSD/illumos — captured as fixtures before writing the
    parser.
 4. `ps -Ao args=` availability and format on illumos (fallback: `ps -eo args`) — captured as fixtures.
