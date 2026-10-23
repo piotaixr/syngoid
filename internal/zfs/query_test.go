@@ -181,6 +181,27 @@ func TestListBookmarks(t *testing.T) {
 	}
 }
 
+// TestListBookmarksTieBreak: two bookmarks of one creation second get the
+// counters 000 and 001, like snapshots.
+func TestListBookmarksTieBreak(t *testing.T) {
+	out := "tank/a#b1\tguid\t11\ntank/a#b1\tcreatetxg\t5\ntank/a#b1\tcreation\t1700000000\n" +
+		"tank/a#b2\tguid\t12\ntank/a#b2\tcreatetxg\t6\ntank/a#b2\tcreation\t1700000000\n"
+	c, _ := newClient(map[string]zfstest.Response{
+		typedArgs("bookmark", "-d 1", "tank/a"): {Stdout: out},
+	})
+	got, err := c.ListBookmarks(context.Background(), "tank/a", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]zfs.Bookmark{"tank/a": {
+		{Name: "b1", GUID: "11", CreateTxg: 5, Creation: 1700000000000},
+		{Name: "b2", GUID: "12", CreateTxg: 6, Creation: 1700000000001},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+}
+
 func TestListBookmarksUnsupported(t *testing.T) {
 	c, _ := newClient(map[string]zfstest.Response{
 		typedArgs("bookmark", "-d 1", "tank"): {Exit: 2, Stderr: "cannot get properties: invalid type 'bookmark'\n"},

@@ -7,8 +7,8 @@ COMMAND
 [kworker/R-kvfree_rcu_reclaim]
 [kworker/R-slub_flushwq]
 [kworker/R-netns]
-[kworker/0:0-hv_vmbus_con]
-[kworker/0:0H-events_highpri]
+[kworker/0:0-cgroup_free]
+[kworker/0:0H-kblockd]
 [kworker/0:1-events]
 [kworker/u16:0-flush-8:0]
 [kworker/R-mm_percpu_wq]
@@ -29,13 +29,13 @@ COMMAND
 [idle_inject/1]
 [migration/1]
 [ksoftirqd/1]
-[kworker/1:0-events]
+[kworker/1:0-cgroup_free]
 [kworker/1:0H-events_highpri]
 [cpuhp/3]
 [idle_inject/3]
 [migration/3]
 [ksoftirqd/3]
-[kworker/3:0-cgroup_bpf_destroy]
+[kworker/3:0-events]
 [kworker/3:0H-events_highpri]
 [kdevtmpfs]
 [kworker/R-inet_frag_wq]
@@ -43,9 +43,9 @@ COMMAND
 [rcu_tasks_trace_kthread]
 [kauditd]
 [khungtaskd]
-[kworker/u16:1-flush-8:0]
+[kworker/u16:1-ext4-rsv-conversion]
 [oom_reaper]
-[kworker/u16:2-writeback]
+[kworker/u16:2-flush-8:0]
 [kworker/R-writeback]
 [kcompactd0]
 [ksmd]
@@ -54,9 +54,9 @@ COMMAND
 [kworker/R-blkcg_punt_bio]
 [kworker/R-kintegrityd]
 [irq/9-acpi]
-[kworker/2:1-events]
+[kworker/2:1-cgroup_offline]
 [kworker/1:1-events]
-[kworker/3:1-cgroup_free]
+[kworker/3:1-events]
 [kworker/R-tpm_dev_wq]
 [kworker/R-ata_sff]
 [kworker/R-md]
@@ -76,43 +76,60 @@ COMMAND
 [kworker/R-nfit]
 [scsi_eh_0]
 [scsi_eh_1]
-[kworker/R-scsi_tmf_1]
 [kworker/R-scsi_tmf_0]
+[kworker/R-scsi_tmf_1]
+[kworker/u16:3-events_power_efficient]
 [kworker/R-nvme-wq]
 [kworker/R-nvme-reset-wq]
 [kworker/R-nvme-delete-wq]
 [kworker/R-nvme-auth-wq]
-[kworker/u16:3-events_power_efficient]
-[kworker/u16:4-flush-8:0]
+[kworker/u16:4-events_power_efficient]
 [kworker/R-mld]
 [kworker/R-ipv6_addrconf]
 [kworker/1:1H-kblockd]
 [hv_balloon]
 [kworker/R-kstrp]
 [kworker/u17:0]
-[kworker/0:1H-kblockd]
+[kworker/2:1H-kblockd]
 [jbd2/sda1-8]
 [kworker/R-ext4-rsv-conversion]
-[kworker/0:2-rcu_gp]
-[kworker/2:1H-kblockd]
+[kworker/2:2-events]
+[kworker/0:1H]
 /usr/lib/systemd/systemd-journald
+[kworker/0:2-events]
 [kworker/R-kmpathd]
 [kworker/R-kmpath_handlerd]
-[kworker/3:2-events]
-[kworker/1:2-cgroup_free]
-[kworker/2:2-events]
-[kworker/1:3]
+[kworker/3:2-cgroup_offline]
+[kworker/3:3-cgroup_free]
+[kworker/3:4-cgroup_free]
+[kworker/2:3-events]
 /sbin/multipathd -d -s
 /usr/lib/systemd/systemd-udevd
+[kworker/1:2-cgroup_free]
 [psimon]
-[kworker/0:3]
+[kworker/R-tls-strp]
+[kworker/R-mlx5_cmd_f84e:00:02.0]
+[kworker/R-mlx5_healthf84e:00:02.0]
+[kworker/R-mlx5_page_allocator]
+[kworker/R-mlx5_events]
+[ptp1]
+[kworker/R-mlx5_fc]
+[kworker/R-mlx5_hv_vhca]
+[kworker/R-mlx5e]
+[kworker/0:3-events]
+[kworker/R-mlx5e_arfs]
+[kworker/R-ib-comp-wq]
+[kworker/R-ib-comp-unb-wq]
+[kworker/R-ib_mcast]
+[kworker/R-ib_nl_sa_wq]
 /usr/lib/linux-tools/6.17.0-1022-azure/hv_kvp_daemon -n
+[kworker/R-mkey_cache]
 [jbd2/sda16-8]
 [kworker/R-ext4-rsv-conversion]
 /usr/lib/systemd/systemd-resolved
 /usr/sbin/haveged --Foreground --verbose=1
 /usr/lib/systemd/systemd-networkd
-[kworker/2:3]
+[kworker/u16:5-flush-8:0]
 @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
 /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
 php-fpm: master process (/etc/php/8.3/fpm/php-fpm.conf)
@@ -121,25 +138,23 @@ php-fpm: master process (/etc/php/8.3/fpm/php-fpm.conf)
 /usr/libexec/udisks2/udisksd
 /usr/bin/python3 -u /usr/sbin/waagent -daemon
 /usr/sbin/cron -f -P
-/usr/sbin/rsyslogd -n -iNONE
+[kworker/3:5]
 /usr/bin/containerd
-/usr/sbin/chronyd -F 1
-[kworker/3:3]
-[kworker/3:4-events]
 /sbin/agetty -o -p -- \u --keep-baud 115200,57600,38400,9600 - vt220
-/usr/sbin/chronyd -F 1
 /sbin/agetty -o -p -- \u --noclear - linux
-/usr/sbin/ModemManager
+/usr/sbin/rsyslogd -n -iNONE
+/usr/sbin/chronyd -F 1
 /usr/lib/systemd/systemd --user
+/usr/sbin/chronyd -F 1
 (sd-pam)
+/usr/sbin/ModemManager
 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
 php-fpm: pool www
 php-fpm: pool www
-[kworker/R-tls-strp]
 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
 /opt/hca/hosted-compute-agent
-sudo -n PROVJOBD_E2E=1 /tmp/provjobd1850579241
-/tmp/provjobd1850579241
+sudo -n PROVJOBD_E2E=1 /tmp/provjobd3131822098
+/tmp/provjobd3131822098
 /home/runner/actions-runner/cached/2.338.0/bin/Runner.Listener run
 /home/runner/actions-runner/cached/2.338.0/bin/Runner.Worker spawnclient 142 145
 /usr/libexec/packagekitd
@@ -156,24 +171,9 @@ sudo -n PROVJOBD_E2E=1 /tmp/provjobd1850579241
 [dbuf_evict]
 [z_vdev_file]
 [l2arc_feed]
-[kworker/u16:5]
-[kworker/R-mlx5_cmd_dea8:00:02.0]
-[kworker/R-mlx5_healthdea8:00:02.0]
-[kworker/R-mlx5_page_allocator]
-[kworker/R-mlx5_events]
-[ptp1]
-[kworker/R-mlx5_fc]
-[kworker/R-mlx5_hv_vhca]
-[kworker/R-mlx5e]
-[kworker/R-mlx5e_arfs]
-[kworker/R-ib-comp-wq]
-[kworker/R-ib-comp-unb-wq]
-[kworker/R-ib_mcast]
-[kworker/R-ib_nl_sa_wq]
-[kworker/R-mkey_cache]
 [psimon]
 zed -F
-/usr/bin/bash -e /home/runner/work/_temp/55bb66a5-ad92-4a64-b9f1-7cad0af5ba4b.sh
+/usr/bin/bash -e /home/runner/work/_temp/f7f82f29-db76-44be-943a-15ca91f84feb.sh
 sudo sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-out
 sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-out
 [z_null_iss]
@@ -220,7 +220,6 @@ sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-out
 [z_vdev_file]
 [z_vdev_file]
 [z_vdev_file]
-[z_vdev_file]
 (udev-worker)
 [z_vdev_file]
 [z_vdev_file]
@@ -230,8 +229,7 @@ sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-out
 [z_vdev_file]
 [z_vdev_file]
 [z_vdev_file]
-[z_rd_int]
-[z_rd_int]
-/bin/sh /var/tmp/sgx.ZQT2g4/b/zfs receive -s syngoidfx/busy/component-1-of-a-long-target-name/component-2-of-a-long-target-name/component-3-of-a-long-target-name/component-4-of-a-long-target-name/component-5-of-a-long-target-name/component-6-of-a-long-target-name
+[z_vdev_file]
+/bin/sh /var/tmp/sgx.JxhymS/b/zfs receive -s syngoidfx/busy/component-1-of-a-long-target-name/component-2-of-a-long-target-name/component-3-of-a-long-target-name/component-4-of-a-long-target-name/component-5-of-a-long-target-name/component-6-of-a-long-target-name
 sleep 5
 ps -eo args

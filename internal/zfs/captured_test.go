@@ -175,19 +175,13 @@ func TestParseCapturedSnapshots(t *testing.T) {
 			}
 			checkCapturedSnapshots(t, osName, all)
 
-			// The typed listing was captured with the property list before
-			// -r / -d 1 (commands.txt); illumos zfs stops parsing options at
-			// the first operand and rejected that order (see
-			// TestClassifyCaptured). getArgs now puts every option first
-			// (TestQueryArgvOptionsBeforeOperands).
-			wantTyped := osName != "illumos"
+			// The typed listings work everywhere with every option before the
+			// operands; illumos rejected the earlier order (run 39853662415,
+			// TestQueryArgvOptionsBeforeOperands).
 			for _, name := range []string{"snaps.txt", "snaps_d1.txt"} {
-				if ok := captureStatus(t, osName, name) == 0; ok != wantTyped {
-					t.Fatalf("%s succeeded = %v, want %v", name, ok, wantTyped)
+				if rc := captureStatus(t, osName, name); rc != 0 {
+					t.Fatalf("%s: rc = %d, want 0", name, rc)
 				}
-			}
-			if !wantTyped {
-				return
 			}
 			typed, err := parseSnapshots(readCaptured(t, osName, "snaps.txt"), "")
 			if err != nil {
@@ -216,15 +210,10 @@ func TestParseCapturedBookmarks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			listings := map[string]string{"all": all}
-			// Same argv order problem as the typed snapshot listing.
-			wantTyped := osName != "illumos"
-			if ok := captureStatus(t, osName, "bookmarks.txt") == 0; ok != wantTyped {
-				t.Fatalf("bookmarks.txt succeeded = %v, want %v", ok, wantTyped)
+			if rc := captureStatus(t, osName, "bookmarks.txt"); rc != 0 {
+				t.Fatalf("bookmarks.txt: rc = %d, want 0", rc)
 			}
-			if wantTyped {
-				listings["typed"] = readCaptured(t, osName, "bookmarks.txt")
-			}
+			listings := map[string]string{"all": all, "typed": readCaptured(t, osName, "bookmarks.txt")}
 			for kind, out := range listings {
 				wantType := ""
 				if kind == "all" {
@@ -285,7 +274,8 @@ func TestParseEstimateCaptured(t *testing.T) {
 }
 
 func TestClassifyCaptured(t *testing.T) {
-	// none means Classify must not recognise the message.
+	// none means Classify must not recognise the message; a
+	// *DestinationExistsError want also checks the name.
 	var none error
 	notIllumos := func(want error) map[string]error {
 		return map[string]error{"linux": want, "freebsd": want, "illumos": none}
@@ -304,23 +294,21 @@ func TestClassifyCaptured(t *testing.T) {
 		{"stderr_partial_state.txt", notIllumos(ErrPartialState), []string{"illumos"}},
 		// "destination 'X' exists / must specify -F": not a partial-state report.
 		{"stderr_partial_state_noF.txt", all(none), nil},
-		// None of the destination-exists variants yields "cannot restore to
-		// X: destination already exists": resuming onto an existing dataset
-		// ("Resuming recv on existing destination", illumos: "invalid backup
-		// stream"), a full stream onto one with snapshots, and one without -F.
+		// Only an incremental onto a destination that already has the
+		// target snapshot name yields "cannot restore to X: destination
+		// already exists". Resuming onto an existing dataset ("Resuming recv
+		// on existing destination", illumos: "invalid backup stream"), a full
+		// stream onto one with snapshots, and one without -F do not.
+		{"stderr_dest_exists_snap.txt", all(&DestinationExistsError{Name: "syngoidfx/conflict@s2"}), nil},
 		{"stderr_dest_exists.txt", all(none), nil},
 		{"stderr_dest_exists_plain.txt", all(none), nil},
 		{"stderr_dest_exists_noF.txt", all(none), nil},
 		{"stderr_no_dataset.txt", all(ErrNoDataset), nil},
-		// illumos rejects the captured argv order before looking the dataset up.
-		{"stderr_no_dataset_get.txt", notIllumos(ErrNoDataset), nil},
+		{"stderr_no_dataset_get.txt", all(ErrNoDataset), nil},
 		{"stderr_recv_no_parent.txt", all(ErrNoDataset), nil},
-		// The capture did not reach the state: zfs send -t found the token's
-		// snapshot by guid in syngoidfx/exist@r1, a received copy of it.
-		{"stderr_resume_source_gone.txt", all(none), capturedOS},
-		{"snaps.txt.stderr", map[string]error{"illumos": none}, nil},
-		{"snaps_d1.txt.stderr", map[string]error{"illumos": none}, nil},
-		{"bookmarks.txt.stderr", map[string]error{"illumos": none}, nil},
+		// Captured once every snapshot with the token's guid was gone:
+		// zfs send -t falls back to any snapshot carrying it.
+		{"stderr_resume_source_gone.txt", all(ErrResumeSourceGone), nil},
 	}
 	for _, osName := range capturedOS {
 		t.Run(osName, func(t *testing.T) {
@@ -339,7 +327,12 @@ func TestClassifyCaptured(t *testing.T) {
 					t.Errorf("%s: rc %d, stderr %q; want success = %v", tt.file, captureStatus(t, osName, capture), stderr, wantEmpty)
 				}
 				got := Classify(stderr)
-				if want == nil {
+				var wantDest, gotDest *DestinationExistsError
+				if errors.As(want, &wantDest) {
+					if !errors.As(got, &gotDest) || gotDest.Name != wantDest.Name {
+						t.Errorf("%s: Classify = %v, want %v", tt.file, got, want)
+					}
+				} else if want == nil {
 					if got != nil {
 						t.Errorf("%s: Classify = %v, want nil", tt.file, got)
 					}

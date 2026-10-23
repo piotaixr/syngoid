@@ -1,0 +1,6 @@
+syngoidfx/fx/a#b1	guid	10777341695618770416
+syngoidfx/fx/a#b1	createtxg	12
+syngoidfx/fx/a#b1	creation	1792745174
+syngoidfx/fx/a#b2	guid	14527374658595931642
+syngoidfx/fx/a#b2	createtxg	13
+syngoidfx/fx/a#b2	creation	1792745175

@@ -4,49 +4,49 @@ zpool-rpool
 /sbin/init
 pageout
 fsflush
-/sbin/dlmgmtd
+/usr/perl5/bin/perl /usr/lib/intrd
 /lib/svc/bin/svc.startd
 /lib/svc/bin/svc.configd
-/usr/lib/hal/hald-addon-network-discovery
-/lib/inet/netcfgd
-/lib/inet/ipmgmtd
-/usr/lib/hal/hald-addon-storage
-/usr/lib/power/powerd
+/usr/sbin/rpcbind
+/usr/lib/hal/hald --daemon=yes
+/sbin/dlmgmtd
 /lib/inet/in.mpathd
-devfsadmd
-hald-runner
-/usr/libexec/amd64/sshd-session -R
-/usr/lib/sysevent/syseventd
+/lib/inet/ipmgmtd
+/lib/inet/netcfgd
+/usr/lib/hal/hald-addon-cpufreq
+/usr/lib/zones/zonestatd
+zpool-syngoidfx
+/usr/lib/power/powerd
 /usr/lib/dbus-daemon --system
 /usr/lib/picl/picld
-sh
-/usr/lib/rcm/rcm_daemon
-/usr/lib/hal/hald --daemon=yes
-/usr/lib/zones/zonestatd
+devfsadmd
 /usr/lib/utmpd
+/usr/lib/sysevent/syseventd
+hald-runner
 /usr/lib/fm/fmd/fmd
-/bin/sh /var/tmp/sgx.1n6705/b/zfs receive -s syngoidfx/busy/component-1-of-a-lo
-/usr/lib/hal/hald-addon-cpufreq
-/usr/lib/saf/sac -t 300
+/usr/lib/hal/hald-addon-network-discovery
+/usr/lib/rcm/rcm_daemon
 /usr/lib/hal/hald-addon-acpi
-/usr/lib/saf/ttymon
-/usr/lib/pfexecd
-/usr/sbin/rpcbind
 /usr/lib/saf/ttymon -g -d /dev/console -l console -m ldterm,ttcompat -h -p omni
-/usr/perl5/bin/perl /usr/lib/intrd
-/usr/lib/autofs/automountd
-/usr/lib/autofs/automountd
-/usr/sbin/cron
-/usr/sbin/sshd
-/usr/lib/inet/inetd start
-ps -Ao args=
-/usr/sbin/rsyslogd
-zpool-syngoidfx
-/usr/sbin/nscd
-/sbin/dhcpagent
-sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-ou
-/usr/lib/hal/hald-addon-storage
-/usr/sbin/in.routed
+/usr/lib/saf/ttymon
+sh
 /usr/libexec/amd64/sshd-session -R
+/usr/lib/hal/hald-addon-storage
+/usr/lib/pfexecd
+/usr/lib/saf/sac -t 300
+/sbin/dhcpagent
+/usr/sbin/nscd
+/usr/sbin/cron
+/usr/lib/inet/inetd start
+sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-ou
+/usr/lib/autofs/automountd
+/usr/lib/autofs/automountd
+/usr/sbin/in.routed
+/usr/lib/hal/hald-addon-storage
 /usr/sbin/chronyd
+/usr/libexec/amd64/sshd-session -R
+/bin/sh /var/tmp/sgx.2j1hkq/b/zfs receive -s syngoidfx/busy/component-1-of-a-lo
+/usr/sbin/sshd
+/usr/sbin/rsyslogd
 /usr/sbin/chronyd
+ps -Ao args=
