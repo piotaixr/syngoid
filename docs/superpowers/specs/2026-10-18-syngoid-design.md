@@ -708,8 +708,9 @@ FreeBSD port, moving data streams to separate SSH sessions.
    window never limits the stream there and a larger one only costs a little more buffering; the mux itself is far
    faster than any link in scope. *CI loopback result:* `TestITRemoteThroughput` (1 GiB through `syngoid
    --compress=none` against a bare `zfs send | ssh sudo -n zfs receive`, fails below 50 % of the baseline) logs a
-   `THROUGHPUT syngoid=<MB/s> baseline=<MB/s>` line. Two CI runs so far: syngoid 202.5 MB/s against a 259.2 MB/s
-   baseline (1 GiB in 5.304 s vs 4.143 s) and 136.7 against 137.8 MB/s (7.852 s vs 7.789 s). The numbers vary
+   `THROUGHPUT syngoid=<MB/s> baseline=<MB/s>` line. Eight CI runs so far: syngoid 130.7–207.8 MB/s against a
+   137.3–259.2 MB/s baseline, i.e. 78–99 % of it; e.g. 202.5 against 259.2 MB/s (1 GiB in 5.304 s vs 4.143 s) and
+   136.7 against 137.8 MB/s (7.852 s vs 7.789 s). The numbers vary
    from run to run with the runner, and loopback with file-backed pools is not a 10 GbE link, so neither says
    anything about a real bandwidth-delay product. Decision: `MaxStreamWindow` stays 16 MiB (the rule for changing
    it: 64 MiB beating 16 MiB by more than 20 % on both measurements; in-process it is slower, and no loopback run
