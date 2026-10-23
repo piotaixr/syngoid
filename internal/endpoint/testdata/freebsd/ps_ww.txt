@@ -35,7 +35,7 @@ sh scripts/ci/capture-fixtures.sh /home/runner/work/syngoid/syngoid/fixtures-out
 [aiod2]
 [aiod3]
 [aiod4]
-/bin/sh /var/tmp/sgx.1yf3gY/b/zfs receive -s syngoidfx/busy/component-1-of-a-long-target-name/component-2-of-a-long-target-name/component-3-of-a-long-target-name/component-4-of-a-long-target-name/component-5-of-a-long-target-name/component-6-of-a-long-target-name
+/bin/sh /var/tmp/sgx.6AES3j/b/zfs receive -s syngoidfx/busy/component-1-of-a-long-target-name/component-2-of-a-long-target-name/component-3-of-a-long-target-name/component-4-of-a-long-target-name/component-5-of-a-long-target-name/component-6-of-a-long-target-name
 sleep 5
 ps -wwAo args=
 /bin/sh -o verify /etc/rc autoboot

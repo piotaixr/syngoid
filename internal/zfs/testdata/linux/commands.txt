@@ -1,10 +1,10 @@
 same-second snapshot pair fx/a@s2, fx/a@s3: yes (attempts: 1)
 tree.txt rc=0: zfs list -Hp -o name,type,origin,used,receive_resume_token,syncoid:sync -t filesystem,volume -r syngoidfx
 tree_single.txt rc=0: zfs list -Hp -o name,type,origin,used,receive_resume_token,syncoid:sync -t filesystem,volume syngoidfx/fx/my data
-snaps.txt rc=0: zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation -r syngoidfx
-snaps_d1.txt rc=0: zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation -d 1 syngoidfx/fx/a
+snaps.txt rc=0: zfs get -Hp -r -t snapshot -o name,property,value guid,createtxg,creation syngoidfx
+snaps_d1.txt rc=0: zfs get -Hp -d 1 -t snapshot -o name,property,value guid,createtxg,creation syngoidfx/fx/a
 snaps_all.txt rc=0: zfs get -Hp -r -o name,property,value all syngoidfx
-bookmarks.txt rc=0: zfs get -Hp -t bookmark -o name,property,value guid,createtxg,creation -r syngoidfx
+bookmarks.txt rc=0: zfs get -Hp -r -t bookmark -o name,property,value guid,createtxg,creation syngoidfx
 props.txt rc=0: zfs get -Hp -o property,value recordsize syngoidfx/fx/a
 props_local.txt rc=0: zfs get -Hp -s local -o property,value all syngoidfx/fx/a
 allow_fx_a.txt rc=0: zfs allow syngoidfx/fx/a
@@ -12,16 +12,17 @@ allow_fx_a_c.txt rc=0: zfs allow syngoidfx/fx/a/c
 estimate_full.txt rc=0: zfs send -nvP syngoidfx/fx/a@s1
 estimate_inc.txt rc=0: zfs send -nvP -i syngoidfx/fx/a@s1 syngoidfx/fx/a@s2
 estimate_inc_I.txt rc=0: zfs send -nvP -I syngoidfx/fx/a@s1 syngoidfx/fx/a@s3
-estimate_resume.txt rc=0: zfs send -nvP -t 1-adb58991b-c0-789c636064000310a500c4ec50360710e72765a52697303030419460caa7a515a796806478e0f26c48f2499525a9c540ba43880fabfe92fcf4d2cc14068618fbbf7633f735c91920c97382e5f312735319188a2bf3d2f33353d22af481a8c8a1c890010100b21d1827
+estimate_resume.txt rc=0: zfs send -nvP -t 1-a68ea298b-c0-789c636064000310a500c4ec50360710e72765a52697303030419460caa7a515a796806478e0f26c48f2499525a9c540ba43880fabfe92fcf4d2cc140686aa8bd6450ff48e7a1920c97382e5f312735319188a2bf3d2f33353d22af481a8c8a1c890010100c241186f
 stderr_partial_state.txt rc=1: recv_full syngoidfx/fx/r@r1 syngoidfx/rx -s -F
 stderr_partial_state_noF.txt rc=1: recv_full syngoidfx/fx/r@r1 syngoidfx/rx -s
-stderr_dest_exists.txt rc=1: recv_resume 1-adb58991b-c0-789c636064000310a500c4ec50360710e72765a52697303030419460caa7a515a796806478e0f26c48f2499525a9c540ba43880fabfe92fcf4d2cc14068618fbbf7633f735c91920c97382e5f312735319188a2bf3d2f33353d22af481a8c8a1c890010100b21d1827 syngoidfx/exist
+stderr_dest_exists.txt rc=1: recv_resume 1-a68ea298b-c0-789c636064000310a500c4ec50360710e72765a52697303030419460caa7a515a796806478e0f26c48f2499525a9c540ba43880fabfe92fcf4d2cc140686aa8bd6450ff48e7a1920c97382e5f312735319188a2bf3d2f33353d22af481a8c8a1c890010100c241186f syngoidfx/exist
 stderr_dest_exists_plain.txt rc=1: recv_full syngoidfx/fx/r@r1 syngoidfx/exist -s -F
 stderr_dest_exists_noF.txt rc=1: recv_full syngoidfx/fx/r@r1 syngoidfx/exist -s
+stderr_dest_exists_snap.txt rc=1: recv_inc syngoidfx/fx/a@s1 syngoidfx/fx/a@s2 syngoidfx/conflict -s -F
 stderr_no_dataset.txt rc=1: zfs list -H -o name syngoidfx/nope
-stderr_no_dataset_get.txt rc=1: zfs get -Hp -t snapshot -o name,property,value guid,createtxg,creation -r syngoidfx/nope
+stderr_no_dataset_get.txt rc=1: zfs get -Hp -r -t snapshot -o name,property,value guid,createtxg,creation syngoidfx/nope
 stderr_recv_no_parent.txt rc=1: recv_full syngoidfx/fx/a@s1 syngoidfx/nope/child -s -F
-stderr_resume_source_gone.txt rc=0: zfs send -t 1-adb58991b-c0-789c636064000310a500c4ec50360710e72765a52697303030419460caa7a515a796806478e0f26c48f2499525a9c540ba43880fabfe92fcf4d2cc14068618fbbf7633f735c91920c97382e5f312735319188a2bf3d2f33353d22af481a8c8a1c890010100b21d1827
+stderr_resume_source_gone.txt rc=255: zfs send -t 1-a68ea298b-c0-789c636064000310a500c4ec50360710e72765a52697303030419460caa7a515a796806478e0f26c48f2499525a9c540ba43880fabfe92fcf4d2cc140686aa8bd6450ff48e7a1920c97382e5f312735319188a2bf3d2f33353d22af481a8c8a1c890010100c241186f
 ps_ww.txt rc=0: ps -wwAo args=
 ps_A.txt rc=0: ps -Ao args=
 ps_e.txt rc=0: ps -eo args
