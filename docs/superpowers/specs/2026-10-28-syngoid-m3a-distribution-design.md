@@ -30,7 +30,7 @@ run a sync to a remote of another platform that downloaded, verified and pushed 
 | A5 | Two password-protected minisign key pairs, *current* and *next*; both public keys embedded. The current secret key and its password are secrets of an approval-gated `release` environment; the next secret key stays offline. | §11.3 rotation without a bridge release. |
 | A6 | Accept only prehashed `ED` signatures. | minisign's default since 0.10; smaller verifier surface. |
 | A7 | Download URLs may be `https` or `http`; any other scheme is an error. | Integrity comes from the signature; plain-HTTP intranet mirrors keep working. |
-| A8 | Tools pinned in `mise.toml` (`go`, `goreleaser`, `minisign`); every CI job runs through `jdx/mise-action` and mise tasks. | Same versions locally and in CI. |
+| A8 | Tools pinned in `mise.toml` (`go`, `goreleaser`, `minisign`) with a committed `mise.lock`; every CI job runs through `jdx/mise-action` and mise tasks, installing only from the lockfile. | Same versions and checksum-pinned downloads locally and in CI. |
 | A9 | The `cross` CI matrix is replaced by `mise run release-check` on every PR. | Builds the same 10 targets through the real release config, and checks signing and verification too. |
 | A10 | First release goes through `v0.1.0-rc.1` (GitHub pre-release), then `v0.1.0`. | Proves download and verification against real GitHub before the real tag. |
 
@@ -51,6 +51,11 @@ kept offline.
 ### 3.2 `mise.toml`
 
 - `[tools]`: `go = "1.27.1"` (unchanged), `goreleaser = "2.19.0"`, `minisign = "0.12"`.
+- `[settings]`: `lockfile = true`, `lockfile_platforms = ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64"]`.
+  `mise.lock` (exact versions, download URLs and checksums per platform) is generated with `mise lock` and
+  committed; it is refreshed with `mise lock` whenever a tool version changes in `mise.toml`, in the same commit.
+  Every CI job sets `MISE_LOCKED=1`, so installs use only the locked URLs and fail when the lockfile lacks the
+  runner's platform or is out of date.
 - New tasks, next to `build`, `vet`, `test`, `lint`, `check`:
   - `release-snapshot` — `goreleaser release --snapshot --clean --skip=sign`: every target and both archive sets
     into `dist/`, unsigned.
@@ -199,7 +204,7 @@ Branch `m3a-distribution` from `main`, two PRs:
 
 1. **Client** — `internal/trust`, `internal/dist`, resolver, `fetch`, README; main spec §3.7, §5.3, §11.4, §11.5.
    Needs the two real public keys (§3.1) before merge.
-2. **Pipeline** (after PR 1: `release-check` uses its verifier) — `mise.toml` tools and tasks, `.goreleaser.yaml`, `ci.yml`, `release.yml`; main spec §1.2, §11.1–11.3,
+2. **Pipeline** (after PR 1: `release-check` uses its verifier) — `mise.toml` tools, tasks and settings, `mise.lock`, `.goreleaser.yaml`, `ci.yml`, `release.yml`; main spec §1.2, §11.1–11.3,
    §12, §13, §14.
 
 Then, by the maintainer: `release` environment, secrets, tag protection. Then, each only after asking: push
