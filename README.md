@@ -60,7 +60,7 @@ The Go toolchain is pinned with [mise](https://mise.jdx.dev/) (`mise.toml`: Go 1
 
 ```sh
 mise install
-CGO_ENABLED=0 mise exec -- go build -o syngoid ./cmd/syngoid
+mise run build
 ```
 
 With a matching Go on your `PATH`, `CGO_ENABLED=0 go build -o syngoid ./cmd/syngoid` works too. Supported targets:
@@ -83,9 +83,10 @@ CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -ldflags "-X github.com/piotaix
 Tests and lint:
 
 ```sh
-mise exec -- go vet ./...
-mise exec -- go test -race ./...
-mise exec -- go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run
+mise run vet
+mise run test
+mise run lint
+mise run check   # all of the above
 ```
 
 ## Usage
