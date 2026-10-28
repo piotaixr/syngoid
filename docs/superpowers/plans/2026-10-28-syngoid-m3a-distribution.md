@@ -28,7 +28,7 @@
 
 ## Review Focus
 
-1. **A download cut short, or two runs downloading at once,** must never leave a file that a later run pushes without checking it. Expected: nothing is installed unless fully verified, and `Lookup` re-verifies on every use. → Task 3 `TestDownloadCancelledMidBodyInstallsNothing`, `TestDownloadConcurrentSameStore`, `TestLookupCorruptBinaryRemoved`.
+1. **A download cut short, or two runs downloading at once,** must never leave a file that a later run pushes without checking it. Expected: nothing is installed unless fully verified, and `Lookup` re-verifies on every use. → Task 3 `TestDownloadCancelledMidBodyInstallsNothing`, `TestDownloadConcurrentSameDir`, `TestLookupCorruptBinaryRemoved`.
 2. **A mirror serving the validly signed `SHA256SUMS` of an older release** (rollback) must be refused end to end, not just in the parser. → Task 3 `TestDownloadRejectsOtherVersion`.
 3. **A home without a usable cache** (cron as a system user, `HOME` unset, read-only home, relative `XDG_CACHE_HOME`) must not break syncs whose agents resolve otherwise, and must explain itself when the cache was needed. Expected: a relative `XDG_CACHE_HOME` is ignored per the XDG spec; a missing cache is reported in the resolver error. → Task 3 `TestUserCacheDir`; Task 4 `TestResolveWithoutCache`.
 4. **A mistyped `--download-url`** (no `{file}`, `{ver}` instead of `{version}`, `ftp://`) must fail with a message naming the template, before any request. → Task 3 `TestExpandURL`.
@@ -153,7 +153,7 @@ Expected: PASS; fuzz finds nothing.
 
 - `TestSignVerifies`: `Release("1.2.3", {"a": …})` → `trust.Verify(files["SHA256SUMS"], files["SHA256SUMS.minisig"], "1.2.3")` is nil, and `ParseSums` lists `a` with its SHA-256.
 - `TestSignMatchesCLIShape`: `ParseSignature` of `Sign` output and of `../testdata/sums.txt.minisig` both succeed, both have `Algorithm == "ED"`, and both untrusted comment lines start with `untrusted comment: `.
-- `TestKeysRestored`: inside a subtest `New(t)`; after it, `trust.Verify` of the golden file with `test.pub` installed by a second `ReplaceKeysForTesting` behaves as before (keys restored).
+- `TestKeysRestored`: sign a release inside a subtest that calls `New`; after the subtest, `trust.Verify` of that release fails with `unknown signing key` (the signer's key was removed again).
 
 - [ ] **Step 2: Run to verify failure** — `mise exec -- go test ./internal/trust/trusttest/` → FAIL (no package).
 - [ ] **Step 3: Implement** — signing mirrors Task 1's verification (signature over `blake2b.Sum512(sums)`, global signature over `sig ‖ trustedComment`).
@@ -193,7 +193,7 @@ Expected: PASS; fuzz finds nothing.
   - `TestDownloadHTTPErrors`: 404 and 500 → `GET <url>: 404 Not Found` etc.
   - `TestDownloadSizeCaps`: sums body of 1 MiB + 1 → `larger than 1048576 bytes`.
   - `TestDownloadCancelledMidBodyInstallsNothing`: the handler writes half the binary then blocks; cancel ctx → `context.Canceled`, no binary, no temp file.
-  - `TestDownloadConcurrentSameStore`: two `Store` values on one `Dir`, 8 goroutines downloading the same platform → all succeed, the binary verifies, no temp files remain.
+  - `TestDownloadConcurrentSameDir`: two `Store` values on one `Dir`, 8 goroutines downloading the same platform → all succeed, the binary verifies, no temp files remain.
   - `TestDownloadFollowsRedirect`: a second server 302-redirects every path to the first → success.
   - `TestDownloadScheme`: template `ftp://x/{file}` → the scheme error, no request.
   - `TestLookup`: miss on empty dir (no warning); hit after `Download`; makes no HTTP request.
@@ -210,7 +210,7 @@ Expected: PASS; fuzz finds nothing.
 ### Task 4: Resolver with cache and download
 
 **Files:**
-- Modify: `internal/bootstrap/resolve.go`, `internal/bootstrap/resolve_test.go`, `internal/bootstrap/connect.go:148` (pass `ctx`), `cmd/syngoid/main.go` (`newConnector`), spec §5.3
+- Modify: `internal/bootstrap/resolve.go`, `internal/bootstrap/resolve_test.go`, `internal/bootstrap/connect.go:148` (pass `ctx`), `internal/dist/store.go` (`NewUserCache`), `cmd/syngoid/main.go` (`newConnector`), spec §5.3
 
 **Interfaces:**
 - Consumes: Task 3 `dist.Store`, `dist.UserCacheDir`, `(*Store).Lookup`, `(*Store).Download`.
@@ -232,7 +232,7 @@ Expected: PASS; fuzz finds nothing.
   - `TestResolveDownloadFailure`: server returns 404 → the download-failed text containing `GET `.
   - `TestResolveWithoutCache`: `Cache` nil, `CacheErr` `cannot locate the user cache: HOME is not set` → the no-cache text.
 - [ ] **Step 2: Run to verify failure** — `mise exec -- go test ./internal/bootstrap/` → FAIL.
-- [ ] **Step 3: Implement** `Resolve` per design §4.3 and `dist.NewUserCache`; in `main.go`, for a release build call `dist.NewUserCache(buildinfo.Version, o.DownloadURL, log)` and set `Cache` or `CacheErr`; set `NoDownload: o.NoDownload`. Update the M2 paragraph of spec §5.3 to the design §4.3 order.
+- [ ] **Step 3: Implement** `Resolve` per design §4.3 (cache and download only when `!buildinfo.IsDev()`, whatever `Cache` holds) and `dist.NewUserCache`; in `main.go`, for a release build call `dist.NewUserCache(buildinfo.Version, o.DownloadURL, log)` and set `Cache` or `CacheErr`; set `NoDownload: o.NoDownload`. Update the M2 paragraph of spec §5.3 to the design §4.3 order.
 - [ ] **Step 4: Run** — `mise run check` → PASS.
 - [ ] **Step 5: Commit** — `feat(bootstrap): resolve agents from the user cache and by download`
 
@@ -300,7 +300,7 @@ Expected: PASS; fuzz finds nothing.
 - [ ] **Step 2: Write `.goreleaser.yaml`** per design §3.3 (`version: 2`; `snapshot.version_template: "{{ incpatch .Version }}-snapshot"`; ldflags `-s -w` plus the three `-X` stamps; archive `files` with `info.mtime: "{{ .CommitDate }}"`).
 - [ ] **Step 3: Write `scripts/release-check.sh`** and tasks — `release-snapshot` = `goreleaser release --snapshot --clean --skip=sign`; `release-check` runs the script: temp dir with trap cleanup, random password, `printf '%s\n%s\n' "$pw" "$pw" | minisign -G -p "$tmp/k.pub" -s "$tmp/k.key"`, then `MINISIGN_KEY_FILE=… MINISIGN_PASSWORD=… goreleaser release --snapshot --clean`, then `SYNGOID_RELEASECHECK_PUBKEY="$tmp/k.pub" go test -tags releasecheck -run TestReleaseCheck ./internal/trust`.
 - [ ] **Step 4: Resolve design §7 items, recording outcomes in spec §14**
-  1. `mise run release-check` with stdin not a terminal (`</dev/null` is wrong here; run it under `script`-free CI-like conditions: `mise run release-check < /dev/null` with the password piped inside the script). Expected: PASS. If `minisign` refuses a non-terminal password, **stop and ask the user** (design §7.1).
+  1. `mise run release-check </dev/null` (no terminal on stdin; the script pipes the password itself). Expected: PASS. If `minisign` refuses a non-terminal password, **stop and ask the user** (design §7.1).
   2. Run `mise run release-check` twice; `diff` the two `dist/SHA256SUMS` → identical. If not, find the varying artifact (`sha256sum` per file) and fix the config (usually an archive mtime) before continuing.
   3. `SHA256SUMS` lists the raw binaries (covered by `TestReleaseCheck`'s 20 entries).
 - [ ] **Step 5: CI** — replace the `cross` job with `release-check` (mise-action, `MISE_LOCKED=1`, `fetch-depth: 0`, `mise run release-check`).
@@ -317,7 +317,7 @@ Expected: PASS; fuzz finds nothing.
 
 - [ ] **Step 1: Write `release.yml`** per design §3.4:
   - `on: push: tags: ['v*']`; `permissions: contents: read` at top level.
-  - `release` job: `environment: release`; job permissions `contents: write`, `id-token: write`, `attestations: write`; checkout `fetch-depth: 0`; mise-action with `MISE_LOCKED=1`; write `${{ secrets.MINISIGN_SECRET_KEY }}` to `$RUNNER_TEMP/minisign.key` with `umask 077`; `mise exec -- goreleaser release --clean` with `MINISIGN_KEY_FILE`, `MINISIGN_PASSWORD`, `GITHUB_TOKEN`; `actions/attest-build-provenance` with `subject-path` covering `dist/*.tar.gz`, `dist/syngoid_*_*_*` (raw, no extension) and `dist/SHA256SUMS`; remove the key file in an `if: always()` step.
+  - `release` job: `environment: release`; job permissions `contents: write`, `id-token: write`, `attestations: write`; checkout `fetch-depth: 0`; mise-action with `MISE_LOCKED=1`; write `${{ secrets.MINISIGN_SECRET_KEY }}` to `$RUNNER_TEMP/minisign.key` with `umask 077`; `mise exec -- goreleaser release --clean` with `MINISIGN_KEY_FILE`, `MINISIGN_PASSWORD`, `GITHUB_TOKEN`; `actions/attest-build-provenance` with `subject-path` covering `dist/syngoid_*` (archives and raw binaries) and `dist/SHA256SUMS`; remove the key file in an `if: always()` step.
   - `verify` job: `needs: release`; mise-action (for `minisign`); `gh release download "$GITHUB_REF_NAME" -p SHA256SUMS -p SHA256SUMS.minisig -p "syngoid_${VER}_linux_amd64"` (`VER` = tag without `v`); `minisign -Vm SHA256SUMS -P <current public key from keys.go>`; `sha256sum --ignore-missing -c SHA256SUMS`; `chmod +x`, then `./syngoid_${VER}_linux_amd64 fetch --all --dir out`; assert 10 files under `out/`.
 - [ ] **Step 2: Verify** — `actionlint` clean if available; `mise run check` PASS.
 - [ ] **Step 3: Commit** — `ci: release workflow with signing, attestations and a fetch check`
