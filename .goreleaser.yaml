@@ -1,0 +1,78 @@
+# GoReleaser config (main spec §11). `mise run release-snapshot` builds an
+# unsigned snapshot into dist/; `mise run release-check` signs one with a
+# throwaway key and verifies it with syngoid's own verifier.
+version: 2
+
+project_name: syngoid
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+builds:
+  - id: syngoid
+    main: ./cmd/syngoid
+    binary: syngoid
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X github.com/piotaixr/syngoid/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/piotaixr/syngoid/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/piotaixr/syngoid/internal/buildinfo.Hash={{ .FullCommit }}
+    goos: [linux, freebsd, illumos, darwin]
+    goarch: [amd64, arm64, arm, riscv64, ppc64le]
+    goarm: ["7"]
+    ignore:
+      - { goos: freebsd, goarch: arm }
+      - { goos: freebsd, goarch: riscv64 }
+      - { goos: freebsd, goarch: ppc64le }
+      - { goos: illumos, goarch: arm64 }
+      - { goos: illumos, goarch: arm }
+      - { goos: illumos, goarch: riscv64 }
+      - { goos: illumos, goarch: ppc64le }
+      - { goos: darwin, goarch: arm }
+      - { goos: darwin, goarch: riscv64 }
+      - { goos: darwin, goarch: ppc64le }
+
+archives:
+  # For people: binary, LICENSE and README.
+  - id: tarball
+    formats: [tar.gz]
+    name_template: "syngoid_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+  # For agent downloads (spec §11.4): the raw binary.
+  - id: raw
+    formats: [binary]
+    name_template: "syngoid_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    cmd: minisign
+    signature: "${artifact}.minisig"
+    args:
+      - -S
+      - -s
+      - "{{ .Env.MINISIGN_KEY_FILE }}"
+      - -m
+      - "${artifact}"
+      - -x
+      - "${artifact}.minisig"
+      - -t
+      - "syngoid {{ .Version }}"
+    stdin: "{{ .Env.MINISIGN_PASSWORD }}"
+
+release:
+  prerelease: auto

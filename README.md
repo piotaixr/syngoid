@@ -132,6 +132,9 @@ mise run check   # vet, test and lint
 mise run test-integration   # real ZFS, needs sudo (see Integration tests)
 ```
 
+`mise run release-check` builds a signed snapshot of every target into `dist/` and verifies it; it needs minisign,
+which mise provides on Linux x64 and Apple-silicon macOS only.
+
 ## Usage
 
 ```
