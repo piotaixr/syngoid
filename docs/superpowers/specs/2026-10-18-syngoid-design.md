@@ -256,9 +256,12 @@ Remote bin dir default: `~/.cache/syngoid/<version>/`; for dev builds `~/.cache/
 Failure of all three is a critical error naming the platform and the remedies (`syngoid fetch --platform …`,
 `--bin-store`).
 
-M2 resolves self → `--bin-store` dirs → `/usr/lib/syngoid/bin` (a store hit is the first regular file
-`DIR/<os>-<arch>/syngoid`); the user cache and download arrive with their verification in M3. Until then the
-failure names `--bin-store=DIR` and `/usr/lib/syngoid/bin/<os>-<arch>/syngoid`.
+Implemented order (design M3a §4.3): self → `--bin-store` dirs → `/usr/lib/syngoid/bin` (a store hit is the first
+regular file `DIR/<os>-<arch>/syngoid`, unverified) → verified user cache lookup → download into the user cache. The
+last two apply to release builds only (dev or dirty builds skip them), and the download is skipped by
+`--no-download`. A run downloads at most once per platform. The failure names `syngoid fetch --platform <os>/<arch>`
+(release builds), `--bin-store=DIR` and `/usr/lib/syngoid/bin/<os>-<arch>/syngoid`, plus the download error when one was
+attempted.
 
 ### 5.4 Push
 

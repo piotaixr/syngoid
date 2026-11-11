@@ -91,6 +91,15 @@ type Store struct {
 	sigRaw  []byte
 }
 
+// NewUserCache returns a Store on the initiator's user cache for version.
+func NewUserCache(version, urlTemplate string, log *slog.Logger) (*Store, error) {
+	dir, err := UserCacheDir(version)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{Dir: dir, Version: version, URLTemplate: urlTemplate, Log: log}, nil
+}
+
 func (s *Store) log() *slog.Logger {
 	if s.Log == nil {
 		return slog.New(slog.NewTextHandler(io.Discard, nil))
