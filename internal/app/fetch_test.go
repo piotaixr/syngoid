@@ -169,3 +169,57 @@ func TestFetchDevBuild(t *testing.T) {
 		t.Errorf("requests made: %v", fe.hits)
 	}
 }
+
+// TestFetchCancelled cancels the context while the first agent download is in
+// flight: fetch must stop, not touch the remaining platforms, log exactly one
+// "CRITICAL ERROR: fetch cancelled" line and exit 2.
+func TestFetchCancelled(t *testing.T) {
+	saved, savedDirty := buildinfo.Version, buildinfo.Dirty
+	t.Cleanup(func() { buildinfo.Version, buildinfo.Dirty = saved, savedDirty })
+	buildinfo.Version, buildinfo.Dirty = "1.2.3", ""
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	platforms := []platform.Platform{{OS: "linux", Arch: "arm64"}, {OS: "freebsd", Arch: "amd64"}}
+	assets := map[string][]byte{}
+	for _, p := range platforms {
+		assets[dist.AssetName("1.2.3", p)] = []byte("agent for " + p.String())
+	}
+	files := trusttest.New(t).Release("1.2.3", assets)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	agentReqs := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if strings.HasPrefix(name, "syngoid_") {
+			mu.Lock()
+			agentReqs++
+			mu.Unlock()
+			cancel()
+			<-r.Context().Done()
+			return
+		}
+		b, ok := files[name]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+
+	env, _, stderr := testEnv()
+	got := Main(ctx, []string{"fetch", "--download-url", srv.URL + "/{file}", "--platform", "linux/arm64", "--platform", "freebsd/amd64"}, env)
+	if got != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr %q", got, stderr)
+	}
+	if want := "CRITICAL ERROR: fetch cancelled\n"; stderr.String() != want {
+		t.Errorf("stderr %q, want %q", stderr, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if agentReqs != 1 {
+		t.Errorf("agent requests = %d, want 1", agentReqs)
+	}
+}

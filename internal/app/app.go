@@ -49,6 +49,10 @@ type Env struct {
 // process exit code.
 func Main(ctx context.Context, args []string, env Env) int {
 	parsed, err := cli.Parse(args, env.PoolExists)
+	if errors.Is(err, cli.ErrHelp) && parsed.Command == cli.CmdFetch {
+		_, _ = fmt.Fprintf(env.Stdout, "Usage: syngoid fetch (--platform OS/ARCH ... | --all) [--dir DIR]\n\nFlags:\n%s", cli.FetchUsage())
+		return 0
+	}
 	if errors.Is(err, cli.ErrHelp) {
 		_, _ = fmt.Fprintf(env.Stdout, "Usage: syngoid [sync] [flags] SOURCE TARGET\n"+
 			"       syngoid permissions [flags] SOURCE TARGET\n"+

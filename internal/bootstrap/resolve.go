@@ -85,7 +85,7 @@ func (r Resolver) Resolve(ctx context.Context, p Platform) (string, error) {
 	}
 	path, err := r.Cache.Download(ctx, p)
 	if err != nil {
-		return "", fmt.Errorf("no syngoid agent binary for %s: download failed: %w; %s", p, err, fetch)
+		return "", fmt.Errorf("no syngoid agent binary for %s: download failed: %w; run \"syngoid fetch --platform %s\" where downloads work, or %s", p, err, p, tail)
 	}
 	return path, nil
 }
