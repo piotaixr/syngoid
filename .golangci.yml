@@ -3,6 +3,18 @@ linters:
   default: standard
   enable:
     - errorlint
+    - forbidigo
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^trust\.ReplaceKeysForTesting$
+          pkg: ^github.com/piotaixr/syngoid/internal/trust$
+          msg: ReplaceKeysForTesting swaps the embedded release keys; use it only from tests and trusttest
+  exclusions:
+    rules:
+      - linters: [forbidigo]
+        path: (_test\.go$|^internal/trust/trusttest/)
 formatters:
   enable:
     - gofumpt

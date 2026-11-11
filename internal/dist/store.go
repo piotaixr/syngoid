@@ -82,7 +82,7 @@ type Store struct {
 	Dir         string
 	Version     string
 	URLTemplate string       // --download-url template
-	Client      *http.Client // nil: proxy from the environment, 30 s dial and header timeouts
+	Client      *http.Client // nil: a shared client with the proxy from the environment, 30 s dial and header timeouts
 	Log         *slog.Logger // nil: discard
 
 	mu      sync.Mutex // serialises Download
@@ -111,14 +111,20 @@ func (s *Store) client() *http.Client {
 	if s.Client != nil {
 		return s.Client
 	}
-	return &http.Client{Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: netTimeout}).DialContext,
-		TLSHandshakeTimeout:   netTimeout,
-		ResponseHeaderTimeout: netTimeout,
-		ForceAttemptHTTP2:     true,
-	}}
+	return defaultClient
 }
+
+// defaultClient is shared by every Store without its own Client, so
+// connections are reused and idle ones are closed after IdleConnTimeout.
+var defaultClient = &http.Client{Transport: &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	DialContext:           (&net.Dialer{Timeout: netTimeout}).DialContext,
+	TLSHandshakeTimeout:   netTimeout,
+	ResponseHeaderTimeout: netTimeout,
+	ForceAttemptHTTP2:     true,
+	IdleConnTimeout:       90 * time.Second,
+	MaxIdleConnsPerHost:   4,
+}}
 
 // Lookup returns the stored binary for p when the store's checksums verify
 // for Version and the binary matches them. A corrupt binary or invalid sums
