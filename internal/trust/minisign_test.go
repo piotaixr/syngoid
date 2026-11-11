@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -192,6 +193,27 @@ func TestEmbeddedKeyIDs(t *testing.T) {
 	for i, k := range keys {
 		if got := k.IDString(); got != want[i] {
 			t.Fatalf("embedded key %d: ID %s, want %s", i, got, want[i])
+		}
+	}
+}
+
+// TestCurrentKeyInReleaseFiles keeps the public key that the release workflow
+// and README check signatures with equal to currentKey, so a key rotation
+// cannot leave either stale: every `-P <key>` there must be currentKey.
+func TestCurrentKeyInReleaseFiles(t *testing.T) {
+	keyArg := regexp.MustCompile(`-P\s+(RW[A-Za-z0-9+/=]+)`)
+	for _, name := range []string{"../../.github/workflows/release.yml", "../../README.md"} {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(b, []byte(currentKey)) {
+			t.Errorf("%s does not contain currentKey %s", name, currentKey)
+		}
+		for _, m := range keyArg.FindAllSubmatch(b, -1) {
+			if got := string(m[1]); got != currentKey {
+				t.Errorf("%s checks with -P %s, want currentKey %s", name, got, currentKey)
+			}
 		}
 	}
 }
