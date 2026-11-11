@@ -49,31 +49,14 @@ jobs:
           SYNGOID_IT_INVASIVE: "1"
         run: mise run test-integration
 
-  cross:
+  release-check:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - linux/amd64
-          - linux/arm64
-          - linux/arm
-          - linux/riscv64
-          - linux/ppc64le
-          - freebsd/amd64
-          - freebsd/arm64
-          - illumos/amd64
-          - darwin/amd64
-          - darwin/arm64
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
-      - name: build ${{ matrix.target }}
-        env:
-          CGO_ENABLED: "0"
-          GOARM: "7"
-        run: |
-          target='${{ matrix.target }}'
-          GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null ./cmd/syngoid
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+        with:
+          install: true
+          cache: true
+      - run: mise run release-check

@@ -605,8 +605,14 @@ Context cancellation closes the data streams; agents kill `zfs send`/`receive` p
 
 ### 11.1 Builds
 
-GoReleaser in GitHub Actions on `vX.Y.Z` tags. `CGO_ENABLED=0`, `-trimpath`, version/commit/build hash via
-`-ldflags`; reproducible. The `go` directive in `go.mod` is the current stable Go release at project start.
+GoReleaser (`.goreleaser.yaml`, config version 2) in GitHub Actions on `vX.Y.Z` tags; Go, GoReleaser and minisign
+are pinned by mise (`mise.toml`, `mise.lock`). `CGO_ENABLED=0`, `-trimpath`, `mod_timestamp` set to the commit time,
+`-ldflags "-s -w"` stamping `buildinfo.Version` (the tag without `v`) and `buildinfo.Commit` and `buildinfo.Hash`
+(both the full commit hash); `Dirty` is never stamped (GoReleaser refuses a dirty tree outside snapshots). `LICENSE`
+and `README.md` enter the archives with the commit time as mtime, so two builds of one commit give the same
+`SHA256SUMS` (§14 item 6). A `-rc.N` tag is published as a pre-release. `mise run release-snapshot` builds an
+unsigned snapshot (version `<next patch>-snapshot`) into `dist/`; `mise run release-check` signs and verifies one
+(§12.1). The `go` directive in `go.mod` is the current stable Go release at project start.
 
 | OS | Architectures |
 |---|---|
@@ -617,18 +623,22 @@ GoReleaser in GitHub Actions on `vX.Y.Z` tags. `CGO_ENABLED=0`, `-trimpath`, ver
 
 ### 11.2 Artifacts
 
-- `syngoid_<ver>_<os>_<arch>.tar.gz` (binary, LICENSE, README)
-- `SHA256SUMS`, `SHA256SUMS.minisig` (trusted comment exactly `syngoid <ver>`)
-- deb/rpm via nfpm
-- `syngoid-remote-bins_<ver>.tar.gz` (all platforms laid out as `<os>-<arch>/syngoid`, for `/usr/lib/syngoid/bin` or
-  `--bin-store`)
+- `syngoid_<ver>_<os>_<arch>.tar.gz` (binary, LICENSE, README) — for people.
+- `syngoid_<ver>_<os>_<arch>` (raw binary) — for agent downloads (§11.4).
+- `SHA256SUMS` (both sets: 20 entries), `SHA256SUMS.minisig` (trusted comment exactly `syngoid <ver>`).
 - GitHub artifact attestations (SLSA provenance) for human verification (`gh attestation verify`); not verified by
   the binary.
 
+There are no deb/rpm packages and no all-platforms tarball; `syngoid fetch --all --dir DIR` builds a `--bin-store`
+(§11.5).
+
 ### 11.3 Signing
 
-minisign key; secret key stored as a GitHub Actions secret in a protected environment requiring maintainer approval
-per release. The binary embeds a list of trusted public keys (current and next) to allow rotation.
+Two password-protected minisign keys, `current` and `next`; the binary embeds both public keys
+(`internal/trust/keys.go`) to allow rotation. The `current` secret key and its password are the secrets
+`MINISIGN_SECRET_KEY` and `MINISIGN_PASSWORD` of the GitHub environment `release`, which requires the maintainer's
+approval and admits deployments only from tags matching `v*`; the `next` secret key is kept offline. GoReleaser signs
+`SHA256SUMS` with `minisign -S -t "syngoid <ver>"`, the password on stdin.
 
 ### 11.4 Download verification
 
@@ -667,7 +677,14 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   exceptions); required-set computation per option combination.
 - Naming: sync snapshot and hold names; strict prune pattern incl. `nas`/`nas2` regression.
 - CLI: alias translation; removed-flag errors.
-- Bootstrap verification: wrong key, tampered sums, mismatched trusted comment, bad archive hash.
+- Download verification: `internal/trust` golden vectors made by the real `minisign` CLI
+  (`scripts/gen-trust-testdata.sh`, `internal/trust/testdata/`): valid, tampered sums, unknown key, trusted comment
+  for another version, trusted comment edited after signing, legacy `Ed` signature, malformed files; `internal/dist`
+  against `httptest`: bad signature or wrong version writes nothing, hash mismatch removes the temporary file.
+- Release pipeline: `mise run release-check` (CI job `release-check`) builds a snapshot of every target signed with
+  a throwaway password-protected key, then `TestReleaseCheck` (`internal/trust/releasecheck_test.go`, build tag
+  `releasecheck`) verifies `SHA256SUMS.minisig` with `trust.VerifyWith` and checks that `SHA256SUMS` has exactly the
+  10 raw binaries and 10 archives, each with a matching hash.
 - Stream: codec round-trips, ring buffer; native Go fuzzing for codecs, zfs parsers, RPC decoder.
 
 ### 12.2 Component (no ZFS, no SSH)
@@ -759,3 +776,12 @@ FreeBSD port, moving data streams to separate SSH sessions.
    the arguments (79 characters printed). `ReceiveBusy` keeps the order `ps -wwAo args=`, `ps -Ao args=`,
    `ps -eo args` (header dropped). *Known limitation:* on illumos a `zfs receive` into a long target name is not
    seen; a second receive then fails critically instead of being skipped as busy.
+5. minisign reading the key password from a non-terminal stdin — *resolved by `mise run release-check </dev/null`*
+   (minisign 0.12, darwin/arm64): `minisign -G` with the password piped twice and `minisign -S` with the password
+   from GoReleaser's `signs.stdin` both succeed, so the password-protected release key works without a terminal.
+6. Reproducible `SHA256SUMS` — *resolved by repeated `mise run release-check` runs* of one tree (darwin/arm64, Go
+   1.27.1, GoReleaser 2.19.0), one of them with an empty `GOCACHE`: the 20 entries were identical with the §11.1
+   settings and no further change. Tar headers keep the builder's user and group names, so archives built on
+   another machine may differ; the raw binaries do not depend on them.
+7. The `checksum` step covers the raw binaries — *resolved:* `SHA256SUMS` lists the 10 `formats: [binary]` assets
+   and the 10 archives, pinned by `TestReleaseCheck`.

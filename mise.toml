@@ -31,6 +31,14 @@ run = [
 description = "Run the integration tests against real ZFS (needs sudo)"
 run = "sudo -E env PATH=$PATH go test -tags integration -v -timeout 45m ./test/integration/..."
 
+[tasks.release-snapshot]
+description = "Build an unsigned GoReleaser snapshot of every target into dist/"
+run = "goreleaser release --snapshot --clean --skip=sign"
+
+[tasks.release-check]
+description = "Build a snapshot signed with a throwaway key and verify it with syngoid's verifier"
+run = "scripts/release-check.sh"
+
 [tasks.check]
 description = "Run vet, test and lint"
 depends = ["vet", "test", "lint"]
