@@ -34,11 +34,17 @@ func runFetch(ctx context.Context, env Env, f *cli.FetchOptions) int {
 	}
 	code := 0
 	for _, p := range platforms {
+		if ctx.Err() != nil {
+			return criticalf(env, "fetch cancelled")
+		}
 		if _, ok := store.Lookup(p); ok {
 			log.Info(fmt.Sprintf("%s already present", p))
 			continue
 		}
 		if _, err := store.Download(ctx, p); err != nil {
+			if ctx.Err() != nil {
+				return criticalf(env, "fetch cancelled")
+			}
 			log.Log(ctx, logx.LevelCritical, fmt.Sprintf("%s: %v", p, err))
 			code = 2
 		}

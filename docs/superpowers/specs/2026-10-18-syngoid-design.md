@@ -652,6 +652,7 @@ Only the initiator's own exact version is ever fetched. Dev builds (version `dev
 
 `fetch --dir DIR` writes the same layout under `DIR`: `DIR/SHA256SUMS`, `DIR/SHA256SUMS.minisig` and
 `DIR/<os>-<arch>/syngoid`, so `DIR` can be passed to `--bin-store` (which trusts it without re-verifying).
+Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not verify is removed.
 
 ## 12. Testing
 

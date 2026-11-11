@@ -512,3 +512,19 @@ func TestStdioConnReadsInOrder(t *testing.T) {
 		t.Errorf("rest = %q, %v", rest, err)
 	}
 }
+
+func TestMainFetchHelp(t *testing.T) {
+	env, stdout, stderr := testEnv()
+	if got := Main(context.Background(), []string{"fetch", "--help"}, env); got != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr %q", got, stderr)
+	}
+	out := stdout.String()
+	for _, want := range []string{"syngoid fetch (--platform OS/ARCH ... | --all)", "--download-url"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout %q does not contain %q", out, want)
+		}
+	}
+	if strings.Contains(out, "--no-download") {
+		t.Errorf("stdout %q mentions --no-download", out)
+	}
+}

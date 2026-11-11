@@ -81,12 +81,15 @@ syngoid --bin-store ./agents -r tank/data backup@nas:pool/data
 ```
 
 `fetch` needs a release build, verifies exactly like an automatic download, and skips platforms that are already
-present and valid. It exits 2 if any platform fails. The same files are published with each release (the binaries named
+present and valid. It exits 2 if any platform fails. Give `fetch --dir DIR` a dedicated directory: a `SHA256SUMS` there
+that does not verify is removed. The same files are published from the first release (v0.1.0) on (the binaries named
 `syngoid_<version>_<os>_<arch>`, `SHA256SUMS` and `SHA256SUMS.minisig`), so a download can be checked by hand:
 
 ```sh
 minisign -Vm SHA256SUMS -P RWTuiOkvhw8dHTEwi6hY70j47/rWnbonaUhx49PVddfCjdvzH449i33s
+# The trusted comment minisig prints must read "syngoid <version>" (the version you downloaded).
 sha256sum --ignore-missing -c SHA256SUMS
+# Available from the first release on (the release workflow that creates attestations lands with the release pipeline).
 gh attestation verify syngoid_<version>_<os>_<arch> --repo piotaixr/syngoid
 ```
 

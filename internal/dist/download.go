@@ -26,6 +26,11 @@ func (s *Store) Download(ctx context.Context, p platform.Platform) (string, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Another call through this Store may have installed p while we waited.
+	if path, ok := s.Lookup(p); ok {
+		return path, nil
+	}
+
 	asset := AssetName(s.Version, p)
 	urlOf := func(file string) (string, error) { return ExpandURL(s.URLTemplate, s.Version, file, p) }
 	sumsURL, err := urlOf(sumsFile)

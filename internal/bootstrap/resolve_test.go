@@ -3,8 +3,10 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/piotaixr/syngoid/internal/buildinfo"
 	"github.com/piotaixr/syngoid/internal/dist"
+	"github.com/piotaixr/syngoid/internal/logx"
 	"github.com/piotaixr/syngoid/internal/platform"
 	"github.com/piotaixr/syngoid/internal/trust/trusttest"
 )
@@ -235,7 +238,7 @@ func TestResolveDownloadFailure(t *testing.T) {
 	r := Resolver{PackagedStore: t.TempDir(), Cache: cache}
 	_, err := r.Resolve(context.Background(), p)
 	pre := "no syngoid agent binary for " + p.String() + ": download failed: "
-	post := "; run \"syngoid fetch --platform " + p.String() + "\", or " + tail(p)
+	post := "; run \"syngoid fetch --platform " + p.String() + "\" where downloads work, or " + tail(p)
 	if err == nil || !strings.HasPrefix(err.Error(), pre) || !strings.HasSuffix(err.Error(), post) || !strings.Contains(err.Error(), "GET ") {
 		t.Errorf("error = %v", err)
 	}
@@ -248,5 +251,37 @@ func TestResolveWithoutCache(t *testing.T) {
 	want := "no syngoid agent binary for " + p.String() + ": cannot locate the user cache: HOME is not set; " + tail(p)
 	if _, err := r.Resolve(context.Background(), p); err == nil || err.Error() != want {
 		t.Errorf("error = %v\nwant %s", err, want)
+	}
+}
+
+func TestResolveRedownloadsCorruptCache(t *testing.T) {
+	releaseBuild(t)
+	p := otherPlatform()
+	srv, hits := releaseServer(t, p)
+	var errb bytes.Buffer
+	cache := newCache(srv)
+	cache.Dir = t.TempDir()
+	cache.Log = logx.New(logx.Config{Stdout: io.Discard, Stderr: &errb})
+	r := Resolver{PackagedStore: t.TempDir(), Cache: cache}
+	got, err := r.Resolve(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(got, []byte("tampered"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := hits.Load()
+	got2, err := r.Resolve(context.Background(), p)
+	if err != nil || got2 != got {
+		t.Fatalf("second Resolve = %q, %v", got2, err)
+	}
+	if hits.Load() == before {
+		t.Error("no second download")
+	}
+	if want := "WARNING: cached agent for " + p.String() + " does not match SHA256SUMS"; !strings.Contains(errb.String(), want) {
+		t.Errorf("stderr %q does not contain %q", errb.String(), want)
+	}
+	if b, err := os.ReadFile(got2); err != nil || string(b) != "agent for "+p.String() {
+		t.Errorf("content %q, %v", b, err)
 	}
 }

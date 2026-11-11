@@ -382,3 +382,40 @@ func TestDownloadScheme(t *testing.T) {
 		t.Error("a request was made")
 	}
 }
+
+func TestDownloadConcurrentSameStoreOnce(t *testing.T) {
+	fx := newFixture(t, "1.2.3")
+	s, _, _ := fx.store(t)
+	var wg sync.WaitGroup
+	paths := make(chan string, 8)
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p, err := s.Download(context.Background(), testPlatform)
+			paths <- p
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(paths)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	first := ""
+	for p := range paths {
+		if first == "" {
+			first = p
+		}
+		if p == "" || p != first {
+			t.Errorf("path %q, want %q", p, first)
+		}
+	}
+	if n := fx.hitCount("/" + AssetName("1.2.3", testPlatform)); n != 1 {
+		t.Errorf("agent requested %d times, want 1", n)
+	}
+}
