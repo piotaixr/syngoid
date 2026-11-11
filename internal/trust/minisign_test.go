@@ -195,3 +195,13 @@ func TestEmbeddedKeyIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyWithShortKey(t *testing.T) {
+	good := loadKey(t, "test.pub")
+	short := PublicKey{ID: good.ID, Key: good.Key[:31]}
+	err := VerifyWith([]PublicKey{short}, readFile(t, "sums.txt"), readFile(t, "sums.txt.minisig"), "1.2.3")
+	want := "invalid public key length 31 for key " + idString(good.ID)
+	if err == nil || err.Error() != want {
+		t.Fatalf("VerifyWith error = %v, want %q", err, want)
+	}
+}

@@ -4,6 +4,7 @@ package dist
 
 import (
 	"bytes"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,5 +154,53 @@ func TestLookupBadSumsRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("binary should be left alone: %v", err)
+	}
+}
+
+func TestLookupOtherVersionSums(t *testing.T) {
+	signer := trusttest.New(t)
+	bin := []byte("agent")
+	files := signer.Release("1.2.2", map[string][]byte{AssetName("1.2.3", testPlatform): bin})
+	dir := t.TempDir()
+	sums := filepath.Join(dir, "SHA256SUMS")
+	binPath := filepath.Join(dir, testPlatform.Dir(), "syngoid")
+	if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, data := range map[string][]byte{
+		sums:              files["SHA256SUMS"],
+		sums + ".minisig": files["SHA256SUMS.minisig"],
+		binPath:           bin,
+	} {
+		if err := os.WriteFile(path, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, errb bytes.Buffer
+	s := &Store{Dir: dir, Version: "1.2.3", Log: logx.New(logx.Config{Stdout: &out, Stderr: &errb})}
+	if _, ok := s.Lookup(testPlatform); ok {
+		t.Fatal("hit with sums signed for another version")
+	}
+	if want := "WARNING: " + sums + " does not verify ("; !strings.HasPrefix(errb.String(), want) {
+		t.Errorf("stderr = %q, want prefix %q", errb.String(), want)
+	}
+	for _, f := range []string{sums, sums + ".minisig"} {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Errorf("%s still present: %v", f, err)
+		}
+	}
+	if _, err := os.Stat(binPath); err != nil {
+		t.Errorf("binary should be left alone: %v", err)
+	}
+}
+
+func TestClientShared(t *testing.T) {
+	a, b := (&Store{}).client(), (&Store{}).client()
+	if a != b {
+		t.Error("default client is not shared between stores")
+	}
+	own := &http.Client{}
+	if got := (&Store{Client: own}).client(); got != own {
+		t.Error("explicit Client not honoured")
 	}
 }

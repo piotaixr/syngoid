@@ -145,6 +145,9 @@ func VerifyWith(keys []PublicKey, sums, sig []byte, wantVersion string) error {
 	if s.Algorithm != "ED" {
 		return fmt.Errorf("unsupported signature algorithm %q", s.Algorithm)
 	}
+	if len(key.Key) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid public key length %d for key %s", len(key.Key), idString(key.ID))
+	}
 	digest := blake2b.Sum512(sums)
 	if !ed25519.Verify(key.Key, digest[:], s.Sig) {
 		return errors.New("invalid signature")
