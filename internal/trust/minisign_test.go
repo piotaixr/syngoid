@@ -182,3 +182,16 @@ func TestEmbeddedKeys(t *testing.T) {
 		t.Fatal("embedded keys share an ID")
 	}
 }
+
+func TestEmbeddedKeyIDs(t *testing.T) {
+	keys := trustedKeys()
+	if len(keys) != 2 {
+		t.Fatalf("got %d embedded keys, want 2", len(keys))
+	}
+	want := []string{"1D1D0F872FE988EE", "7AA1ABAB97755335"}
+	for i, k := range keys {
+		if got := k.IDString(); got != want[i] {
+			t.Fatalf("embedded key %d: ID %s, want %s", i, got, want[i])
+		}
+	}
+}
