@@ -38,7 +38,15 @@ jobs:
           MINISIGN_KEY_FILE: ${{ runner.temp }}/minisign.key
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
           GITHUB_TOKEN: ${{ github.token }}
+          # Without it GoReleaser takes the highest tag on HEAD by version sort,
+          # which ranks v0.1.0-rc.1 above v0.1.0 on the same commit.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
         run: mise exec -- goreleaser release --clean
+      - name: check GoReleaser released the pushed tag
+        run: |
+          tag="$(jq -r .tag dist/metadata.json)"
+          echo "GoReleaser released $tag"
+          test "$tag" = "$GITHUB_REF_NAME"
       # GoReleaser leaves the raw agents under per-target directories, so the
       # checksum file names every asset (archives and raw binaries) instead.
       - name: attest the release assets
