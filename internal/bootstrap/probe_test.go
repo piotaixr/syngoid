@@ -143,12 +143,12 @@ func TestParseProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ProbeResult{Platform: Platform{"linux", "amd64"}, Home: "/home/u", Dir: "/home/u/.cache/syngoid/1.0.0", Executable: true}
+	want := ProbeResult{Platform: Platform{OS: "linux", Arch: "amd64"}, Home: "/home/u", Dir: "/home/u/.cache/syngoid/1.0.0", Executable: true}
 	if pr != want {
 		t.Errorf("ParseProbe = %+v, want %+v", pr, want)
 	}
 	illumos, err := ParseProbe("SunOS\ni86pc\namd64\n/export/home/u\n/export/home/u/d\nno\n")
-	if err != nil || illumos.Platform != (Platform{"illumos", "amd64"}) || illumos.Executable {
+	if err != nil || illumos.Platform != (Platform{OS: "illumos", Arch: "amd64"}) || illumos.Executable {
 		t.Errorf("illumos probe = %+v, %v", illumos, err)
 	}
 	for _, bad := range []string{

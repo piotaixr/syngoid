@@ -9,11 +9,12 @@ import (
 	"testing"
 
 	"github.com/piotaixr/syngoid/internal/buildinfo"
+	"github.com/piotaixr/syngoid/internal/platform"
 )
 
 // otherPlatform returns a supported platform that is not Self.
 func otherPlatform() Platform {
-	for _, p := range supported {
+	for _, p := range platform.Supported() {
 		if p != Self() {
 			return p
 		}
