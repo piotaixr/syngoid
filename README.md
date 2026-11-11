@@ -8,7 +8,11 @@ and honours the same `syncoid:sync` property, so it can take over an existing sy
 Like sanoid/syncoid, syngoid is licensed under the GNU GPL v3; see [LICENSE](LICENSE). The design is described in
 the [spec](docs/superpowers/specs/2026-10-18-syngoid-design.md).
 
-## Status: milestone 3a (distribution)
+## Status: v0.1.0 (milestone 3a)
+
+v0.1.0 is the first release. Download the archive (`syngoid_<version>_<os>_<arch>.tar.gz`) or the raw binary for your
+platform from the [releases page](https://github.com/piotaixr/syngoid/releases) and check it as shown under
+[Agent binaries](#agent-binaries).
 
 SOURCE and TARGET may now be `[user@]host:pool/dataset`, replicated over SSH between any two hosts (local → remote,
 remote → local, remote → remote). The sync engine of milestone 1 is unchanged: planner, executor, resume and
@@ -22,8 +26,8 @@ remediation, recursion, clones, bookmarks, holds, pruning, preflight permission 
   directories are pruned. The remote needs no `mbuffer`, `pv` or compressor.
 - **Other platforms.** The running binary is pushed as is when the remote has the same OS and architecture. For any
   other platform syngoid looks for `DIR/<os>-<arch>/syngoid` (for example `freebsd-amd64`) in each `--bin-store DIR`,
-  then in `/usr/lib/syngoid/bin`, and fails with the missing path otherwise. A development build (version `dev`)
-  only accepts an agent with its own build hash, so build the initiator and every `--bin-store` binary with the same
+  then in `/usr/lib/syngoid/bin`; a release build then uses its user cache and downloads the verified release binary
+  ([Agent binaries](#agent-binaries)). A development build (version `dev`) never downloads and only accepts an agent with its own build hash, so build the initiator and every `--bin-store` binary with the same
   stamped hash ([Build](#build)); otherwise the handshake fails with `agent mismatch: build hash …`.
 - **Delegation on remotes.** Preflight checks the remote user's `zfs allow` delegations on the remote host. Missing
   grants are printed per host so each line can be pasted on the right machine:
@@ -82,14 +86,13 @@ syngoid --bin-store ./agents -r tank/data backup@nas:pool/data
 
 `fetch` needs a release build, verifies exactly like an automatic download, and skips platforms that are already
 present and valid. It exits 2 if any platform fails. Give `fetch --dir DIR` a dedicated directory: a `SHA256SUMS` there
-that does not verify is removed. The same files are published from the first release (v0.1.0) on (the binaries named
+that does not verify is removed. Every release since v0.1.0 publishes the same files (the binaries named
 `syngoid_<version>_<os>_<arch>`, `SHA256SUMS` and `SHA256SUMS.minisig`), so a download can be checked by hand:
 
 ```sh
 minisign -Vm SHA256SUMS -P RWTuiOkvhw8dHTEwi6hY70j47/rWnbonaUhx49PVddfCjdvzH449i33s
 # The trusted comment minisig prints must read "syngoid <version>" (the version you downloaded).
 sha256sum --ignore-missing -c SHA256SUMS
-# Available from the first release on.
 gh attestation verify syngoid_<version>_<os>_<arch> --repo piotaixr/syngoid
 ```
 
