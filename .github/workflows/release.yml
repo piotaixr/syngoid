@@ -21,10 +21,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # GoReleaser publishes through the API with GITHUB_TOKEN from env;
+          # it never pushes, so git needs no stored credentials.
+          persist-credentials: false
       - uses: jdx/mise-action@v5
         with:
           install: true
-          cache: true
+          cache: false
       - name: write the signing key
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
@@ -40,14 +43,14 @@ jobs:
           # which ranks v0.1.0-rc.1 above v0.1.0 on the same commit.
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
         run: mise exec -- goreleaser release --clean
+      - name: remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/minisign.key"
       - name: check GoReleaser released the pushed tag
         run: |
           tag="$(jq -r .tag dist/metadata.json)"
           echo "GoReleaser released $tag"
           test "$tag" = "$GITHUB_REF_NAME"
-      - name: remove the signing key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/minisign.key"
 
   # Its own job so that a failed attestation can be re-run without the release
   # job: it reads only the published SHA256SUMS.
@@ -65,7 +68,7 @@ jobs:
       - uses: jdx/mise-action@v5
         with:
           install: true
-          cache: true
+          cache: false
       - name: download SHA256SUMS
         run: |
           mkdir dl
@@ -101,7 +104,7 @@ jobs:
       - uses: jdx/mise-action@v5
         with:
           install: true
-          cache: true
+          cache: false
       - name: download the published files
         run: |
           VER="${GITHUB_REF_NAME#v}"
