@@ -137,8 +137,13 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
 - **`permissions SOURCE TARGET [OPTIONS]`** — connects to both sides (same bootstrap as `sync`), computes the
   required permission set from OPTIONS (§6.2), checks it, and prints both the full minimal grant commands and the
   missing grants for each side. Exit 0 if everything is granted, 2 otherwise.
-- **`fetch [--platform OS/ARCH ...] [--all]`** — downloads and verifies agent binaries for this exact version into
-  the local cache (§11.5). For pre-seeding before air-gapped use.
+- **`fetch (--platform OS/ARCH ... | --all) [--dir DIR] [--download-url TEMPLATE] [--quiet] [--debug]`** — downloads
+  and verifies (§11.4) the agent binaries for this exact version into the user cache, or into `DIR` (§11.5 layout),
+  for pre-seeding before air-gapped use. Exactly one of `--platform` (repeatable, each a §11.1 target) and `--all`
+  is required. Sums and signature are fetched once per invocation; a platform already present and valid logs
+  `INFO: <os>/<arch> already present` and is not downloaded again. Every platform is attempted; exit 0 if all
+  succeeded, else 2. A dev or dirty build fails with `CRITICAL ERROR: fetch needs a release build`. `--no-download`
+  does not apply.
 - **`version`** — prints `syngoid <version> (commit <commit>[, dirty], build <hash12>) protocol <n>`. The build hash
   is the ldflags-stamped `buildinfo.Hash` when set, otherwise the hex SHA-256 of the running executable; `hash12`
   is its first 12 characters. An unstamped dev build therefore only matches an agent that is the same file (which
@@ -248,12 +253,12 @@ Remote bin dir default: `~/.cache/syngoid/<version>/`; for dev builds `~/.cache/
 ### 5.3 Binary resolution (initiator side, first hit wins)
 
 1. **Self** — if remote `os/arch` equals the initiator's, push `os.Executable()`.
-2. **Local stores** — `--bin-store` dirs, then `/usr/lib/syngoid/bin/<os>-<arch>/syngoid`, then the cache
-   `${XDG_CACHE_HOME:-~/.cache}/syngoid/bin/<ver>/<os>-<arch>/syngoid`. Cached binaries are re-verified against the
-   cached signed `SHA256SUMS` before use.
-3. **Download** — unless `--no-download` or a dev build: fetch, verify (§11.4), cache, use.
+2. **Local stores** — `--bin-store` dirs, then `/usr/lib/syngoid/bin/<os>-<arch>/syngoid`.
+3. **User cache** — release builds only: `${XDG_CACHE_HOME:-~/.cache}/syngoid/bin/<ver>/<os>-<arch>/syngoid`,
+   re-verified against the cached signed `SHA256SUMS` before use.
+4. **Download** — release builds only, and not with `--no-download`: fetch, verify (§11.4), cache, use.
 
-Failure of all three is a critical error naming the platform and the remedies (`syngoid fetch --platform …`,
+Failure of all of them is a critical error naming the platform and the remedies (`syngoid fetch --platform …`,
 `--bin-store`).
 
 Implemented order (design M3a §4.3): self → `--bin-store` dirs → `/usr/lib/syngoid/bin` (a store hit is the first
@@ -627,12 +632,13 @@ per release. The binary embeds a list of trusted public keys (current and next) 
 
 ### 11.4 Download verification
 
-1. Download `SHA256SUMS`, `SHA256SUMS.minisig`, and the platform archive (HTTPS, system roots, `HTTPS_PROXY`
-   honoured; URL from `--download-url` template).
+1. Download `SHA256SUMS`, `SHA256SUMS.minisig`, and the platform's raw agent binary `syngoid_<ver>_<os>_<arch>`
+   (HTTP or HTTPS, system roots, `HTTPS_PROXY` honoured; URL from the `--download-url` template).
 2. Verify the minisign signature against an embedded key.
 3. Verify the signed trusted comment equals `syngoid <expected version>` (anti-rollback / anti-substitution).
-4. Verify the archive SHA-256 against its `SHA256SUMS` line.
-5. Extract in-process; store binary + verified `SHA256SUMS` in the cache.
+4. Verify the binary's SHA-256 against its `SHA256SUMS` line.
+5. Install the binary (mode 0755) plus the verified `SHA256SUMS` and signature into the store; the binary is
+   written last, through a temporary file and a rename. There is no archive and no extraction.
 
 Only the initiator's own exact version is ever fetched. Dev builds (version `dev` or dirty tree) never download.
 
@@ -643,6 +649,9 @@ Only the initiator's own exact version is ever fetched. Dev builds (version `dev
 | Packaged store | `/usr/lib/syngoid/bin/<os>-<arch>/syngoid` |
 | User cache | `${XDG_CACHE_HOME:-~/.cache}/syngoid/bin/<ver>/<os>-<arch>/syngoid` (+ `SHA256SUMS`, `.minisig`) |
 | Remote agent | `~/.cache/syngoid/<ver>/syngoid` (dir 0700), override `--remote-bin-dir` |
+
+`fetch --dir DIR` writes the same layout under `DIR`: `DIR/SHA256SUMS`, `DIR/SHA256SUMS.minisig` and
+`DIR/<os>-<arch>/syngoid`, so `DIR` can be passed to `--bin-store` (which trusts it without re-verifying).
 
 ## 12. Testing
 

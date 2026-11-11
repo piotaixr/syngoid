@@ -52,6 +52,7 @@ func Main(ctx context.Context, args []string, env Env) int {
 	if errors.Is(err, cli.ErrHelp) {
 		_, _ = fmt.Fprintf(env.Stdout, "Usage: syngoid [sync] [flags] SOURCE TARGET\n"+
 			"       syngoid permissions [flags] SOURCE TARGET\n"+
+			"       syngoid fetch (--platform OS/ARCH ... | --all) [--dir DIR]\n"+
 			"       syngoid version\n\nFlags:\n%s", cli.Usage())
 		return 0
 	}
@@ -62,7 +63,7 @@ func Main(ctx context.Context, args []string, env Env) int {
 	case cli.CmdVersion:
 		return runVersion(env)
 	case cli.CmdFetch:
-		return criticalf(env, "fetch is not supported yet (milestone 3)")
+		return runFetch(ctx, env, parsed.Fetch)
 	case cli.CmdServe:
 		return runServe(ctx, env)
 	case cli.CmdSync, cli.CmdPermissions:

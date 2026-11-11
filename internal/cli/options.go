@@ -68,6 +68,7 @@ type Options struct {
 type Parsed struct {
 	Command  Command
 	Options  *Options
+	Fetch    *FetchOptions
 	Warnings []string
 }
 
@@ -216,6 +217,9 @@ var removedFlags = []struct{ name, msg string }{
 // Parse parses the command line (without the program name). localPoolExists
 // resolves the "name:rest" ambiguity of SOURCE and TARGET; it may be nil.
 func Parse(args []string, localPoolExists func(string) bool) (Parsed, error) {
+	if len(args) > 0 && args[0] == string(CmdFetch) {
+		return parseFetch(args[1:])
+	}
 	var r raw
 	fs := newFlagSet(&r)
 	if err := fs.Parse(args); err != nil {
@@ -239,7 +243,7 @@ func Parse(args []string, localPoolExists func(string) bool) (Parsed, error) {
 	}
 
 	switch cmd {
-	case CmdFetch, CmdServe, CmdVersion:
+	case CmdFetch, CmdServe, CmdVersion: // fetch only gets here after global flags
 		onlyVersionFlag := cmd == CmdVersion && fs.NFlag() == 1 && r.version
 		if fs.NFlag() > 0 && !onlyVersionFlag {
 			return Parsed{}, fmt.Errorf("%s takes no options", cmd)
