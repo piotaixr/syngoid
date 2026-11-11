@@ -3,11 +3,13 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/piotaixr/syngoid/internal/buildinfo"
+	"github.com/piotaixr/syngoid/internal/dist"
 )
 
 // packagedStore is the store distribution packages install (§11.5).
@@ -34,18 +36,26 @@ type Resolver struct {
 	PackagedStore string
 	// Executable returns the running binary; nil means os.Executable.
 	Executable func() (string, error)
+	// Cache is the verified user cache, looked up and downloaded into for
+	// release builds; nil means neither.
+	Cache *dist.Store
+	// CacheErr says why Cache is nil for a release build.
+	CacheErr error
+	// NoDownload skips the download step; a cache hit still wins.
+	NoDownload bool
 }
 
 // Resolve returns the running binary when p is Self, else the first regular
-// file DIR/<os>-<arch>/syngoid over BinStores, then PackagedStore.
-func (r Resolver) Resolve(p Platform) (string, error) {
+// file DIR/<os>-<arch>/syngoid over BinStores, then PackagedStore, then (release
+// builds only) a verified user cache hit, then a download into the cache.
+func (r Resolver) Resolve(ctx context.Context, p Platform) (string, error) {
 	if p == Self() {
 		if r.Executable != nil {
 			return r.Executable()
 		}
 		return os.Executable()
 	}
-	sub := p.OS + "-" + p.Arch
+	sub := p.Dir()
 	pkg := r.PackagedStore
 	if pkg == "" {
 		pkg = packagedStore
@@ -56,6 +66,26 @@ func (r Resolver) Resolve(p Platform) (string, error) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("no syngoid agent binary for %s: put one at DIR/%s/syngoid and pass --bin-store=DIR, or install %s/%s/syngoid",
-		p, sub, packagedStore, sub)
+	tail := fmt.Sprintf("put one at DIR/%s/syngoid and pass --bin-store=DIR, or install %s/%s/syngoid", sub, packagedStore, sub)
+	if buildinfo.IsDev() {
+		return "", fmt.Errorf("no syngoid agent binary for %s: %s", p, tail)
+	}
+	fetch := fmt.Sprintf("run \"syngoid fetch --platform %s\", or %s", p, tail)
+	if r.Cache == nil {
+		if r.CacheErr != nil {
+			return "", fmt.Errorf("no syngoid agent binary for %s: %w; %s", p, r.CacheErr, tail)
+		}
+		return "", fmt.Errorf("no syngoid agent binary for %s: %s", p, tail)
+	}
+	if path, ok := r.Cache.Lookup(p); ok {
+		return path, nil
+	}
+	if r.NoDownload {
+		return "", fmt.Errorf("no syngoid agent binary for %s (--no-download): %s", p, fetch)
+	}
+	path, err := r.Cache.Download(ctx, p)
+	if err != nil {
+		return "", fmt.Errorf("no syngoid agent binary for %s: download failed: %w; %s", p, err, fetch)
+	}
+	return path, nil
 }

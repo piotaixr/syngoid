@@ -18,7 +18,9 @@ import (
 
 	"github.com/piotaixr/syngoid/internal/app"
 	"github.com/piotaixr/syngoid/internal/bootstrap"
+	"github.com/piotaixr/syngoid/internal/buildinfo"
 	"github.com/piotaixr/syngoid/internal/cli"
+	"github.com/piotaixr/syngoid/internal/dist"
 	"github.com/piotaixr/syngoid/internal/endpoint"
 	"github.com/piotaixr/syngoid/internal/sshx"
 	"github.com/piotaixr/syngoid/internal/zfs"
@@ -60,11 +62,15 @@ type poolConnector struct{ pool *bootstrap.Pool }
 // newConnector returns a Connector of ssh masters and self-pushed agents
 // configured from o.
 func newConnector(o *cli.Options, log *slog.Logger, stdinIsTTY bool) (app.Connector, error) {
+	res := bootstrap.Resolver{BinStores: o.BinStores, NoDownload: o.NoDownload}
+	if !buildinfo.IsDev() {
+		res.Cache, res.CacheErr = dist.NewUserCache(buildinfo.Version, o.DownloadURL, log)
+	}
 	pool, err := bootstrap.NewSSHPool(
 		sshx.Config{Options: o.SSHOptions, ConfigFile: o.SSHConfig, StdinIsTTY: stdinIsTTY, Log: log},
 		bootstrap.Options{
 			RemoteBinDir: o.RemoteBinDir,
-			Resolver:     bootstrap.Resolver{BinStores: o.BinStores},
+			Resolver:     res,
 			Debug:        o.Debug,
 			Log:          log,
 		})

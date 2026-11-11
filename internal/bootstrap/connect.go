@@ -145,7 +145,7 @@ type connector struct {
 // push resolves the agent binary for the probed platform and installs it in
 // pr.Dir, returning its SHA-256.
 func (c *connector) push(ctx context.Context, pr ProbeResult) (string, error) {
-	path, err := c.o.Resolver.Resolve(pr.Platform)
+	path, err := c.o.Resolver.Resolve(ctx, pr.Platform)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", c.label, err)
 	}
