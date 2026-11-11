@@ -26,15 +26,53 @@ pools=(syngoid-src syngoid-dst)
 it_user=syngoid-it
 
 export DEBIAN_FRONTEND=noninteractive
+
+# GitHub's Ubuntu runners fetch packages through a mirror list
+# (mirror+file:/etc/apt/apt-mirrors.txt) that names only ubuntu.com hosts, so
+# an ubuntu.com outage fails the whole job. Keep the listed mirrors whose host
+# resolves and add independent full mirrors after them. Packages stay verified
+# against the Ubuntu archive key whichever mirror serves them.
+mirror_list=/etc/apt/apt-mirrors.txt
+fallback_mirrors=(
+	https://mirrors.edge.kernel.org/ubuntu/
+	https://mirror.us.leaseweb.net/ubuntu/
+	https://ftp.halifax.rwth-aachen.de/ubuntu/
+)
+if [ -f "$mirror_list" ] &&
+	grep -rqsF "mirror+file:$mirror_list" /etc/apt/sources.list /etc/apt/sources.list.d; then
+	new_list=$(mktemp)
+	prio=0
+	while IFS= read -r line; do
+		url=${line%%[[:space:]]*}
+		host=${url#*://}
+		host=${host%%/*}
+		case " ${fallback_mirrors[*]} " in *" $url "*) continue ;; esac
+		if [ -n "$host" ] && getent hosts "$host" >/dev/null; then
+			prio=$((prio + 1))
+			printf '%s\tpriority:%d\n' "$url" "$prio" >>"$new_list"
+		else
+			echo "apt mirror $url does not resolve; leaving it out" >&2
+		fi
+	done <"$mirror_list"
+	for url in "${fallback_mirrors[@]}"; do
+		prio=$((prio + 1))
+		printf '%s\tpriority:%d\n' "$url" "$prio" >>"$new_list"
+	done
+	install -m 0644 "$new_list" "$mirror_list"
+	rm -f "$new_list"
+	cat "$mirror_list"
+fi
+apt_opts=(-q -o Acquire::Retries=3)
+
 # Refresh the package lists once, before any install: a stale image index
 # makes apt-get install fail with 404s.
-apt-get update -q
+apt-get "${apt_opts[@]}" update
 if ! command -v zfs >/dev/null 2>&1; then
-	apt-get install -y -q zfsutils-linux
+	apt-get "${apt_opts[@]}" install -y zfsutils-linux
 fi
 if ! modprobe zfs; then
 	# Some cloud kernels ship the zfs module in the extra modules package.
-	apt-get install -y -q "linux-modules-extra-$(uname -r)"
+	apt-get "${apt_opts[@]}" install -y "linux-modules-extra-$(uname -r)"
 	modprobe zfs
 fi
 
@@ -45,7 +83,7 @@ syncoid=/usr/local/bin/syncoid
 syncoid_url=https://raw.githubusercontent.com/jimsalterjrs/sanoid/v2.2.0/syncoid
 syncoid_sha256=5f2965b9b48165df3f507f1b473c8fe74a5ba088a59d412c7d2c746969dfa1e5
 if [ ! -x "$syncoid" ]; then
-	apt-get install -y -q libcapture-tiny-perl curl
+	apt-get "${apt_opts[@]}" install -y libcapture-tiny-perl curl
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
 	curl -fsSL -o "$tmp/syncoid" "$syncoid_url"
@@ -82,7 +120,7 @@ install -d -m 0750 -o "$it_user" -g "$(id -gn "$it_user")" "$it_home"
 # only done where that is expected: CI, or an explicit opt-in.
 if [ "${GITHUB_ACTIONS:-}" = true ] || [ "${SYNGOID_IT_SSHD:-}" = 1 ]; then
 	if [ ! -x /usr/sbin/sshd ] || ! command -v ssh-keyscan >/dev/null 2>&1; then
-		apt-get install -y -q openssh-server openssh-client
+		apt-get "${apt_opts[@]}" install -y openssh-server openssh-client
 	fi
 	ssh-keygen -A
 	mkdir -p /run/sshd
