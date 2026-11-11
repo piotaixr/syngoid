@@ -608,9 +608,9 @@ Context cancellation closes the data streams; agents kill `zfs send`/`receive` p
 GoReleaser (`.goreleaser.yaml`, config version 2) in GitHub Actions on `vX.Y.Z` tags; Go, GoReleaser and minisign
 are pinned by mise (`mise.toml`, `mise.lock`). `CGO_ENABLED=0`, `-trimpath`, `mod_timestamp` set to the commit time,
 `-ldflags "-s -w"` stamping `buildinfo.Version` (the tag without `v`) and `buildinfo.Commit` and `buildinfo.Hash`
-(both the full commit hash); `Dirty` is never stamped (GoReleaser refuses a dirty tree outside snapshots). `LICENSE`
-and `README.md` enter the archives with the commit time as mtime, so two builds of one commit give the same
-`SHA256SUMS` (§14 item 6). A `-rc.N` tag is published as a pre-release. `mise run release-snapshot` builds an
+(both the full commit hash); `Dirty` is never stamped (GoReleaser refuses a dirty tree outside snapshots). Every
+tarball member is owned by `root:root` (uid and gid 0) with a fixed mode (0755 for the binary, 0644 for `LICENSE` and
+`README.md`) and the commit time as mtime, so two builds of one commit give the same `SHA256SUMS` (§14 item 6). A `-rc.N` tag is published as a pre-release. `mise run release-snapshot` builds an
 unsigned snapshot (version `<next patch>-snapshot`) into `dist/`; `mise run release-check` signs and verifies one
 (§12.1). The `go` directive in `go.mod` is the current stable Go release at project start.
 
@@ -678,9 +678,10 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
 - Naming: sync snapshot and hold names; strict prune pattern incl. `nas`/`nas2` regression.
 - CLI: alias translation; removed-flag errors.
 - Download verification: `internal/trust` golden vectors made by the real `minisign` CLI
-  (`scripts/gen-trust-testdata.sh`, `internal/trust/testdata/`): valid, tampered sums, unknown key, trusted comment
-  for another version, trusted comment edited after signing, legacy `Ed` signature, malformed files; `internal/dist`
-  against `httptest`: bad signature or wrong version writes nothing, hash mismatch removes the temporary file.
+  (`scripts/gen-trust-testdata.sh`, `internal/trust/testdata/`), plus cases derived from them in-test: valid,
+  tampered sums, unknown key, trusted comment for another version, trusted comment edited after signing, legacy `Ed`
+  signature, malformed files; `internal/dist` against `httptest`: bad signature or wrong version writes nothing,
+  hash mismatch removes the temporary file.
 - Release pipeline: `mise run release-check` (CI job `release-check`) builds a snapshot of every target signed with
   a throwaway password-protected key, then `TestReleaseCheck` (`internal/trust/releasecheck_test.go`, build tag
   `releasecheck`) verifies `SHA256SUMS.minisig` with `trust.VerifyWith` and checks that `SHA256SUMS` has exactly the
@@ -781,7 +782,9 @@ FreeBSD port, moving data streams to separate SSH sessions.
    from GoReleaser's `signs.stdin` both succeed, so the password-protected release key works without a terminal.
 6. Reproducible `SHA256SUMS` — *resolved by repeated `mise run release-check` runs* of one tree (darwin/arm64, Go
    1.27.1, GoReleaser 2.19.0), one of them with an empty `GOCACHE`: the 20 entries were identical with the §11.1
-   settings and no further change. Tar headers keep the builder's user and group names, so archives built on
-   another machine may differ; the raw binaries do not depend on them.
+   settings. Tar headers first carried the builder's uid, gid, user and group names and the checkout's file modes,
+   so a tarball from another machine could differ; the archive config now pins `root:root` (uid and gid 0), the
+   modes and the mtimes of every member, and a snapshot with `LICENSE` and `README.md` at mode 0600 gave the same
+   `SHA256SUMS`. Not yet compared across machines (local darwin/arm64 against the Linux release runner).
 7. The `checksum` step covers the raw binaries — *resolved:* `SHA256SUMS` lists the 10 `formats: [binary]` assets
    and the 10 archives, pinned by `TestReleaseCheck`.

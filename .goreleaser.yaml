@@ -42,13 +42,21 @@ archives:
   - id: tarball
     formats: [tar.gz]
     name_template: "syngoid_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Fixed ownership, modes and mtimes, so the tarball does not depend on the
+    # builder's account or checkout (the binary's mtime is mod_timestamp).
+    builds_info:
+      owner: root
+      group: root
+      mode: 0755
     files:
       - src: LICENSE
-        info:
+        info: &doc_info
+          owner: root
+          group: root
+          mode: 0644
           mtime: "{{ .CommitDate }}"
       - src: README.md
-        info:
-          mtime: "{{ .CommitDate }}"
+        info: *doc_info
   # For agent downloads (spec §11.4): the raw binary.
   - id: raw
     formats: [binary]

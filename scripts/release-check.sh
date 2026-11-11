@@ -12,7 +12,7 @@ cd "$root"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-pw=$(openssl rand -hex 32)
+pw=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
 printf '%s\n%s\n' "$pw" "$pw" | minisign -G -p "$tmp/k.pub" -s "$tmp/k.key"
 
 MINISIGN_KEY_FILE="$tmp/k.key" MINISIGN_PASSWORD="$pw" goreleaser release --snapshot --clean
