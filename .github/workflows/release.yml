@@ -17,8 +17,6 @@ jobs:
     environment: release
     permissions:
       contents: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -47,19 +45,49 @@ jobs:
           tag="$(jq -r .tag dist/metadata.json)"
           echo "GoReleaser released $tag"
           test "$tag" = "$GITHUB_REF_NAME"
-      # GoReleaser leaves the raw agents under per-target directories, so the
-      # checksum file names every asset (archives and raw binaries) instead.
-      - name: attest the release assets
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-checksums: dist/SHA256SUMS
-      - name: attest SHA256SUMS
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: dist/SHA256SUMS
       - name: remove the signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/minisign.key"
+
+  # Its own job so that a failed attestation can be re-run without the release
+  # job: it reads only the published SHA256SUMS.
+  attest:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v5
+        with:
+          install: true
+          cache: true
+      - name: download SHA256SUMS
+        run: |
+          mkdir dl
+          gh release download "$GITHUB_REF_NAME" --dir dl -p SHA256SUMS -p SHA256SUMS.minisig
+      - name: check the signature
+        working-directory: dl
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          # The current release public key (internal/trust/keys.go).
+          out="$(mise exec -- minisign -Vm SHA256SUMS -P RWTuiOkvhw8dHTEwi6hY70j47/rWnbonaUhx49PVddfCjdvzH449i33s)"
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | grep -Fx "Trusted comment: syngoid $VER"
+      # The checksum file names every asset (archives and raw binaries), so the
+      # assets themselves need not be downloaded.
+      - name: attest the release assets
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: dl/SHA256SUMS
+      - name: attest SHA256SUMS
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dl/SHA256SUMS
 
   verify:
     needs: release

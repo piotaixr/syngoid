@@ -98,8 +98,12 @@ The key above is the release signing key (ID `1D1D0F872FE988EE`); it is also emb
 ## Releases
 
 A maintainer pushes a `v*` tag. The `release` workflow waits for approval of the `release` environment, then GoReleaser
-builds and signs the assets and the workflow attests them. A `verify` job then checks the published files (signature,
+builds and signs the assets. An `attest` job then attests the published files and a `verify` job checks them (signature,
 checksums and `syngoid fetch --all`). Tags such as `v0.2.0-rc.1` become pre-releases.
+
+If `attest` or `verify` fails, re-run that job alone: both only read the published release. If the `release` job fails
+before publishing, delete any draft release left for the tag (`gh release delete <tag>`, which keeps the tag) before
+re-running it.
 
 ## Build
 
