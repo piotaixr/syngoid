@@ -606,14 +606,16 @@ Context cancellation closes the data streams; agents kill `zfs send`/`receive` p
 
 ### 11.1 Builds
 
-GoReleaser (`.goreleaser.yaml`, config version 2) in GitHub Actions on `vX.Y.Z` tags; Go, GoReleaser and minisign
-are pinned by mise (`mise.toml`, `mise.lock`). `CGO_ENABLED=0`, `-trimpath`, `mod_timestamp` set to the commit time,
-`-ldflags "-s -w"` stamping `buildinfo.Version` (the tag without `v`) and `buildinfo.Commit` and `buildinfo.Hash`
-(both the full commit hash); `Dirty` is never stamped (GoReleaser refuses a dirty tree outside snapshots). Every
-tarball member is owned by `root:root` (uid and gid 0) with a fixed mode (0755 for the binary, 0644 for `LICENSE` and
-`README.md`) and the commit time as mtime, so two builds of one commit give the same `SHA256SUMS` (§14 item 6). A `-rc.N` tag is published as a pre-release. `mise run release-snapshot` builds an
-unsigned snapshot (version `<next patch>-snapshot`) into `dist/`; `mise run release-check` signs and verifies one
-(§12.1). The `go` directive in `go.mod` is the current stable Go release at project start.
+GoReleaser (`.goreleaser.yaml`, config version 2) in GitHub Actions on `v*` tags (`vX.Y.Z`, or `vX.Y.Z-rc.N` published
+as a pre-release; the workflow passes the pushed tag as `GORELEASER_CURRENT_TAG`, since a release candidate and its
+release can share a commit); Go, GoReleaser and minisign are pinned by mise (`mise.toml`, `mise.lock`). `CGO_ENABLED=0`,
+`-trimpath`, `mod_timestamp` set to the commit time, `-ldflags "-s -w"` stamping `buildinfo.Version` (the tag without
+`v`) and `buildinfo.Commit` and `buildinfo.Hash` (both the full commit hash); `Dirty` is never stamped (GoReleaser
+refuses a dirty tree outside snapshots). Every tarball member is owned by `root:root` (uid and gid 0) with a fixed mode
+(0755 for the binary, 0644 for `LICENSE` and `README.md`) and the commit time as mtime, so two builds of one commit give
+the same `SHA256SUMS` (§14 item 6). `mise run release-snapshot` builds an unsigned snapshot (version
+`<next patch>-snapshot`) into `dist/`; `mise run release-check` signs and verifies one (§12.1). The `go` directive in
+`go.mod` is the current stable Go release at project start.
 
 | OS | Architectures |
 |---|---|
@@ -686,7 +688,8 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
 - Release pipeline: `mise run release-check` (CI job `release-check`) builds a snapshot of every target signed with
   a throwaway password-protected key, then `TestReleaseCheck` (`internal/trust/releasecheck_test.go`, build tag
   `releasecheck`) verifies `SHA256SUMS.minisig` with `trust.VerifyWith` and checks that `SHA256SUMS` has exactly the
-  10 raw binaries and 10 archives, each with a matching hash.
+  10 raw binaries and 10 archives, each with a matching hash; it also runs the raw binary for the host and checks that
+  `syngoid version` reports the snapshot's version, not `dev`.
 - Stream: codec round-trips, ring buffer; native Go fuzzing for codecs, zfs parsers, RPC decoder.
 
 ### 12.2 Component (no ZFS, no SSH)
