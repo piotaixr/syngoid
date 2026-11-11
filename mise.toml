@@ -1,5 +1,11 @@
 [tools]
 go = "1.27.1"
+goreleaser = "2.19.0"
+minisign = "0.12"
+
+[settings]
+lockfile = true
+lockfile_platforms = ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64"]
 
 [tasks.build]
 description = "Build the syngoid binary"
@@ -15,8 +21,15 @@ description = "Run the unit tests with the race detector"
 run = "go test -race ./..."
 
 [tasks.lint]
-description = "Run golangci-lint"
-run = "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run"
+description = "Run golangci-lint, with and without the integration tag"
+run = [
+  "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run",
+  "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --build-tags integration,releasecheck",
+]
+
+[tasks.test-integration]
+description = "Run the integration tests against real ZFS (needs sudo)"
+run = "sudo -E env PATH=$PATH go test -tags integration -v -timeout 45m ./test/integration/..."
 
 [tasks.check]
 description = "Run vet, test and lint"
