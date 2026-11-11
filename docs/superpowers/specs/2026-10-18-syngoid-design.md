@@ -790,6 +790,7 @@ nightly FreeBSD/OmniOS CI jobs.
    settings. Tar headers first carried the builder's uid, gid, user and group names and the checkout's file modes,
    so a tarball from another machine could differ; the archive config now pins `root:root` (uid and gid 0), the
    modes and the mtimes of every member, and a snapshot with `LICENSE` and `README.md` at mode 0600 gave the same
-   `SHA256SUMS`. Not yet compared across machines (local darwin/arm64 against the Linux release runner).
+   `SHA256SUMS`. Across machines too: rebuilding the `v0.1.0-rc.1` tag on darwin/arm64 (`GORELEASER_CURRENT_TAG`
+   set, publish and signing skipped) gave a `SHA256SUMS` identical to the one the Linux release runner published.
 7. The `checksum` step covers the raw binaries — *resolved:* `SHA256SUMS` lists the 10 `formats: [binary]` assets
    and the 10 archives, pinned by `TestReleaseCheck`.
