@@ -84,17 +84,23 @@ kept offline.
 
 ### 3.4 Workflows
 
-- **`ci.yml`** — every job uses `jdx/mise-action`:
+- Every job in both workflows uses `jdx/mise-action` with mise itself pinned (`version` and `sha256`) and
+  `MISE_LOCKED=1`.
+- **`ci.yml`**:
   - `test`: `mise run vet`, `mise run test`.
   - `lint`: `mise run lint` (replaces `golangci-lint-action`; still v2.15.0, both tag sets).
   - `integration`: `scripts/ci/setup-zfs.sh`, then `mise run test-integration`.
   - `release-check` (replaces `cross`): `mise run release-check`.
   - `fixtures.yml` is unchanged.
 - **`release.yml`** — on push of a `v*` tag:
-  - `release` job, `environment: release`; permissions `contents: write`, `id-token: write`, `attestations: write`.
-    Checkout with full history, mise-action, write `MINISIGN_SECRET_KEY` to a 0600 file under `$RUNNER_TEMP`
-    (`MINISIGN_KEY_FILE`), `goreleaser release --clean` through mise, then `actions/attest-build-provenance` over
-    `dist/*.tar.gz`, the raw binaries and `SHA256SUMS`.
+  - `release` job, `environment: release`; permission `contents: write`. Checkout with full history, mise-action,
+    write `MINISIGN_SECRET_KEY` to a 0600 file under `$RUNNER_TEMP` (`MINISIGN_KEY_FILE`),
+    `goreleaser release --clean` through mise with `GORELEASER_CURRENT_TAG` set to the pushed tag (git would rank a
+    `-rc.N` tag on the same commit first), remove the key file, then check `dist/metadata.json` names the pushed tag.
+  - `attest` job (needs `release`; permissions `contents: read`, `id-token: write`, `attestations: write`):
+    downloads the published `SHA256SUMS` and its signature, checks them like `verify`, then runs
+    `actions/attest-build-provenance` with `subject-checksums: SHA256SUMS` (every archive and raw binary under its
+    published name) and once more over `SHA256SUMS` itself. Kept apart from `release` so it can be re-run alone.
   - `verify` job (needs `release`): downloads the published `SHA256SUMS`, `SHA256SUMS.minisig` and
     `syngoid_<ver>_linux_amd64`, checks them with `minisign -V -P <current public key>` and
     `sha256sum --ignore-missing -c`, then runs `syngoid fetch --all --dir out` against the
