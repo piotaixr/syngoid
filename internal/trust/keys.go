@@ -2,13 +2,16 @@ package trust
 
 import "sync"
 
-// embeddedKeys are the minisign public keys (the .pub text or its bare base64
-// line) that may sign releases: the current key and the next one, so a key
-// rotation ships before the old key retires.
-//
-// TODO(maintainer): paste the current and next public keys (plan Task 0).
-// While the list is empty Verify fails closed: every signature is rejected.
-var embeddedKeys = []string{}
+// currentKey is the release signing key with key ID 1D1D0F872FE988EE.
+const currentKey = "RWTuiOkvhw8dHTEwi6hY70j47/rWnbonaUhx49PVddfCjdvzH449i33s"
+
+// nextKey is the release signing key with key ID 7AA1ABAB97755335, trusted
+// ahead of rotation so a key change ships before the old key retires.
+const nextKey = "RWQ1U3WXq6uheoyHZzKTMH6KbMQtx3HEPp6igyCk4+vcudZUDDHGio80"
+
+// embeddedKeys are the minisign public keys (bare base64 lines) that may sign
+// releases: the current key first, then the next one.
+var embeddedKeys = []string{currentKey, nextKey}
 
 var (
 	keysOnce sync.Once
