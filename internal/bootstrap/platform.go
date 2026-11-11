@@ -7,28 +7,13 @@ package bootstrap
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
+
+	"github.com/piotaixr/syngoid/internal/platform"
 )
 
 // Platform is an os/arch pair in Go's GOOS/GOARCH naming.
-type Platform struct{ OS, Arch string }
-
-func (p Platform) String() string { return p.OS + "/" + p.Arch }
-
-// supported lists the release targets (§11.1).
-var supported = []Platform{
-	{"linux", "amd64"},
-	{"linux", "arm64"},
-	{"linux", "arm"},
-	{"linux", "riscv64"},
-	{"linux", "ppc64le"},
-	{"freebsd", "amd64"},
-	{"freebsd", "arm64"},
-	{"illumos", "amd64"},
-	{"darwin", "amd64"},
-	{"darwin", "arm64"},
-}
+type Platform = platform.Platform
 
 var unameOS = map[string]string{"Linux": "linux", "FreeBSD": "freebsd", "SunOS": "illumos", "Darwin": "darwin"}
 
@@ -57,6 +42,7 @@ func ParsePlatform(unameS, unameM, isainfo string) (Platform, error) {
 	if p.Arch == "" {
 		p.Arch = strings.ToLower(unameM)
 	}
+	supported := platform.Supported()
 	for _, s := range supported {
 		if p == s {
 			return p, nil
@@ -71,4 +57,4 @@ func ParsePlatform(unameS, unameM, isainfo string) (Platform, error) {
 }
 
 // Self returns the platform this binary was built for.
-func Self() Platform { return Platform{OS: runtime.GOOS, Arch: runtime.GOARCH} }
+func Self() Platform { return platform.Self() }
