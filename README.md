@@ -97,7 +97,8 @@ The key above is the release signing key (ID `1D1D0F872FE988EE`); it is also emb
 
 ## Build
 
-The Go toolchain is pinned with [mise](https://mise.jdx.dev/) (`mise.toml`: Go 1.27.1):
+The tools (Go, GoReleaser, minisign) are pinned with [mise](https://mise.jdx.dev/) in `mise.toml`, with checksums in
+`mise.lock`; CI installs only from that lockfile:
 
 ```sh
 mise install
@@ -127,7 +128,8 @@ Tests and lint:
 mise run vet
 mise run test
 mise run lint
-mise run check   # all of the above
+mise run check   # vet, test and lint
+mise run test-integration   # real ZFS, needs sudo (see Integration tests)
 ```
 
 ## Usage

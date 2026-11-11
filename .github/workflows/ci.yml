@@ -9,45 +9,45 @@ on:
 permissions:
   contents: read
 
+env:
+  MISE_LOCKED: "1"
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: jdx/mise-action@v5
         with:
-          go-version-file: go.mod
-      - run: go vet ./...
-      - run: go test -race ./...
+          install: true
+          cache: true
+      - run: mise run vet
+      - run: mise run test
 
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: jdx/mise-action@v5
         with:
-          go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.15.0
-      - uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.15.0
-          args: --build-tags integration
+          install: true
+          cache: true
+      - run: mise run lint
 
   integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: jdx/mise-action@v5
         with:
-          go-version-file: go.mod
+          install: true
+          cache: true
       - run: scripts/ci/setup-zfs.sh
       - name: integration tests (real ZFS)
         env:
           SYNGOID_IT: "1"
           SYNGOID_IT_INVASIVE: "1"
-        run: sudo -E env PATH=$PATH go test -tags integration -v -timeout 45m ./test/integration/...
+        run: mise run test-integration
 
   cross:
     runs-on: ubuntu-latest
