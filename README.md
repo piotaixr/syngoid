@@ -8,7 +8,7 @@ and honours the same `syncoid:sync` property, so it can take over an existing sy
 Like sanoid/syncoid, syngoid is licensed under the GNU GPL v3; see [LICENSE](LICENSE). The design is described in
 the [spec](docs/superpowers/specs/2026-10-18-syngoid-design.md).
 
-## Status: milestone 2 (remote)
+## Status: milestone 3a (distribution)
 
 SOURCE and TARGET may now be `[user@]host:pool/dataset`, replicated over SSH between any two hosts (local → remote,
 remote → local, remote → remote). The sync engine of milestone 1 is unchanged: planner, executor, resume and
@@ -51,8 +51,46 @@ Changes since milestone 1:
 - `syngoid version` prints the build hash too: `syngoid <version> (commit <commit>, build <hash12>) protocol <n>`.
 - With `--force-delete` a child dataset now waits for its parent, so a parent that fails skips its whole subtree.
 
-Not yet available (milestone 3): `syngoid fetch`, release downloads (`--no-download`, `--download-url`) and OTLP
-export (`--otel-endpoint`); the flags are accepted but have no effect yet.
+Not yet available (milestone 3): OTLP export (`--otel-endpoint`); the flag is accepted but has no effect yet.
+
+### Agent binaries
+
+To replicate to or from a host of another platform, the initiator needs a syngoid binary for that platform. It looks,
+in order, for:
+
+1. its own binary, when the remote has the same OS and architecture;
+2. `DIR/<os>-<arch>/syngoid` in each `--bin-store DIR`, then `/usr/lib/syngoid/bin/<os>-<arch>/syngoid`;
+3. the user cache, `${XDG_CACHE_HOME:-~/.cache}/syngoid/bin/<version>/<os>-<arch>/syngoid`;
+4. a download of the release binary for exactly this version (`--download-url` sets the URL template, default
+   `https://github.com/piotaixr/syngoid/releases/download/v{version}/{file}`), stored in the user cache.
+
+Steps 3 and 4 apply to release builds only; a development build never uses the cache and never downloads. Pass
+`--no-download` to forbid step 4. A download is checked before it is kept: `SHA256SUMS` must carry a valid minisign
+signature from a key embedded in syngoid whose signed comment names this version, and the binary must match its line
+in `SHA256SUMS`. Nothing is installed otherwise.
+
+To pre-seed binaries, for instance for hosts without internet access, run `fetch` where there is a connection:
+
+```sh
+# Into the user cache of this machine.
+syngoid fetch --platform linux/arm64 --platform freebsd/amd64
+
+# Every release platform into a directory, then copy it to the air-gapped host and use it with --bin-store.
+syngoid fetch --all --dir ./agents
+syngoid --bin-store ./agents -r tank/data backup@nas:pool/data
+```
+
+`fetch` needs a release build, verifies exactly like an automatic download, and skips platforms that are already
+present and valid. It exits 2 if any platform fails. The same files are published with each release (the binaries named
+`syngoid_<version>_<os>_<arch>`, `SHA256SUMS` and `SHA256SUMS.minisig`), so a download can be checked by hand:
+
+```sh
+minisign -Vm SHA256SUMS -P RWTuiOkvhw8dHTEwi6hY70j47/rWnbonaUhx49PVddfCjdvzH449i33s
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify syngoid_<version>_<os>_<arch> --repo piotaixr/syngoid
+```
+
+The key above is the release signing key (ID `1D1D0F872FE988EE`); it is also embedded in syngoid.
 
 ## Build
 
@@ -94,6 +132,7 @@ mise run check   # all of the above
 ```
 syngoid [sync] [flags] SOURCE TARGET
 syngoid permissions [flags] SOURCE TARGET
+syngoid fetch (--platform OS/ARCH ... | --all) [--dir DIR]
 syngoid version
 ```
 

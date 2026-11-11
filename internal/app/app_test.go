@@ -150,16 +150,6 @@ func TestMainSudoFlagsReachNewLocal(t *testing.T) {
 	}
 }
 
-func TestMainFetchNotYet(t *testing.T) {
-	se := newSyncEnv(t, endpoint.HostInfo{})
-	if got := se.run("fetch"); got != 2 {
-		t.Errorf("exit code = %d, want 2", got)
-	}
-	if want := "not supported yet (milestone 3)"; !strings.Contains(se.stderr.String(), want) {
-		t.Errorf("stderr %q does not contain %q", se.stderr, want)
-	}
-}
-
 // duplex joins the initiator's ends of the two pipes into one connection.
 type duplex struct {
 	io.Reader

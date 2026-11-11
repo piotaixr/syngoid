@@ -56,7 +56,7 @@ func TestParseSubcommands(t *testing.T) {
 		want Command
 	}{
 		{[]string{"permissions", "a", "b"}, CmdPermissions},
-		{[]string{"fetch"}, CmdFetch},
+		{[]string{"fetch", "--all"}, CmdFetch},
 		{[]string{"version"}, CmdVersion},
 		{[]string{"--version"}, CmdVersion},
 		{[]string{"serve"}, CmdServe},
@@ -73,7 +73,7 @@ func TestParseSubcommands(t *testing.T) {
 
 func TestParseSubcommandArity(t *testing.T) {
 	for _, args := range [][]string{
-		{"fetch", "x"},
+		{"fetch", "--all", "x"},
 		{"serve", "x"},
 		{"version", "x"},
 		{"fetch", "-r"},
