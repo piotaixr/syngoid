@@ -1,0 +1,2 @@
+abb35c616421af72198ad7c2aeeef38516f08f6a7afb2a728cf0068a8a712ddc  syngoid_1.2.3_linux_amd64
+6e2993aaaed366542d8b4abce7f17c85d8fd88e837a9cc9ef68d22c5b18ac129  syngoid_1.2.3_freebsd_amd64
