@@ -33,6 +33,7 @@ ZFS datasets between local and/or remote hosts using `zfs send`/`zfs receive`.
 - Restricted-shell targets that can run only `zfs` (the agent binary must be executable on every remote).
 - Traces and metrics export (logs only via OTLP).
 - Self-update, Homebrew tap, FreeBSD port.
+- deb/rpm packages, an all-platforms remote-bins tarball and nightly FreeBSD/OmniOS jobs (deferred, see §13).
 
 ## 2. Decision log
 
@@ -722,7 +723,8 @@ TDD per unit; `go test -race`, `go vet`, `golangci-lint` on every PR. No coverag
 
 Parallel transfers (`--jobs`), bandwidth limiting, OTel traces and metrics, JSON plan output, insecure direct
 connections, plain `zfs send | ssh zfs recv` fallback for restricted-shell hosts, self-update, Homebrew tap,
-FreeBSD port, moving data streams to separate SSH sessions.
+FreeBSD port, moving data streams to separate SSH sessions, deb/rpm packages, an all-platforms remote-bins tarball,
+nightly FreeBSD/OmniOS CI jobs.
 
 ## 14. Verification items (resolved during implementation by test, not by guess)
 

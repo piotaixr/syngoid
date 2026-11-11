@@ -89,11 +89,17 @@ that does not verify is removed. The same files are published from the first rel
 minisign -Vm SHA256SUMS -P RWTuiOkvhw8dHTEwi6hY70j47/rWnbonaUhx49PVddfCjdvzH449i33s
 # The trusted comment minisig prints must read "syngoid <version>" (the version you downloaded).
 sha256sum --ignore-missing -c SHA256SUMS
-# Available from the first release on (the release workflow that creates attestations lands with the release pipeline).
+# Available from the first release on.
 gh attestation verify syngoid_<version>_<os>_<arch> --repo piotaixr/syngoid
 ```
 
 The key above is the release signing key (ID `1D1D0F872FE988EE`); it is also embedded in syngoid.
+
+## Releases
+
+A maintainer pushes a `v*` tag. The `release` workflow waits for approval of the `release` environment, then GoReleaser
+builds and signs the assets and the workflow attests them. A `verify` job then checks the published files (signature,
+checksums and `syngoid fetch --all`). Tags such as `v0.2.0-rc.1` become pre-releases.
 
 ## Build
 

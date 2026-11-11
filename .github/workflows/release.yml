@@ -1,0 +1,92 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  MISE_LOCKED: "1"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+        with:
+          install: true
+          cache: true
+      - name: write the signing key
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+      - name: build, sign and publish
+        env:
+          MINISIGN_KEY_FILE: ${{ runner.temp }}/minisign.key
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise exec -- goreleaser release --clean
+      # GoReleaser leaves the raw agents under per-target directories, so the
+      # checksum file names every asset (archives and raw binaries) instead.
+      - name: attest the release assets
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: attest SHA256SUMS
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/SHA256SUMS
+      - name: remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/minisign.key"
+
+  verify:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v5
+        with:
+          install: true
+          cache: true
+      - name: download the published files
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir dl
+          gh release download "$GITHUB_REF_NAME" --dir dl \
+            -p SHA256SUMS -p SHA256SUMS.minisig -p "syngoid_${VER}_linux_amd64"
+      - name: check the signature and checksums
+        working-directory: dl
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          # The current release public key (internal/trust/keys.go).
+          out="$(mise exec -- minisign -Vm SHA256SUMS -P RWTuiOkvhw8dHTEwi6hY70j47/rWnbonaUhx49PVddfCjdvzH449i33s)"
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | grep -Fx "Trusted comment: syngoid $VER"
+          sha256sum --ignore-missing -c SHA256SUMS
+      - name: fetch every platform with the published agent
+        working-directory: dl
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          chmod +x "syngoid_${VER}_linux_amd64"
+          "./syngoid_${VER}_linux_amd64" fetch --all --dir out
+          n="$(find out -mindepth 2 -maxdepth 2 -name syngoid -type f | wc -l)"
+          echo "fetched $n agents"
+          test "$n" -eq 10
