@@ -23,7 +23,7 @@ description = "Run the unit tests with the race detector"
 run = "go test -race ./..."
 
 [tasks.lint]
-description = "Run golangci-lint, with and without the integration tag"
+description = "Run golangci-lint twice: without build tags, then with the integration and releasecheck tags"
 run = [
   "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run",
   "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --build-tags integration,releasecheck",
