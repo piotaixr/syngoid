@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/piotaixr/syngoid/internal/cli"
@@ -43,7 +44,18 @@ type Executor struct {
 	UnprivLinuxTarget    bool
 	// SyncSnap is this run's sync snapshot name ("" with --no-sync-snap).
 	SyncSnap string
+	// Interrupts, when non-nil, is armed while datasets are dispatched; a
+	// drain stops starting new ones. nil never drains.
+	Interrupts Interrupts
 
+	// drained records that the dispatcher stopped because of a drain.
+	drained atomic.Bool
+	// abortMu guards transfers, the number of transfers between their
+	// progress Start and Finish, and abortDecided, set once this run's
+	// abort warning has been decided.
+	abortMu      sync.Mutex
+	transfers    int
+	abortDecided bool
 	// mu guards warnedUnpriv, which records the sources already warned
 	// about properties dropped for an unprivileged Linux target.
 	mu           sync.Mutex
@@ -51,6 +63,10 @@ type Executor struct {
 	// confirmMu serializes Confirm calls: one question at a time.
 	confirmMu sync.Mutex
 }
+
+// Drained reports whether the last Run stopped dispatching because the
+// user asked to drain it.
+func (e *Executor) Drained() bool { return e.drained.Load() }
 
 // confirm asks Confirm, when set, whether to run a destructive step; only
 // one question is asked at a time.
@@ -69,12 +85,12 @@ func (e *Executor) confirm(question string) bool {
 // every dataset, then runs up to Opts.Jobs datasets at once (at least one)
 // in dependency order, starting the lowest-index ready dataset first.
 // A dataset whose dependency ended other than ok or nothing to do is
-// skipped as a soft failure. After ctx is cancelled no new dataset starts,
-// the running ones are waited for, and every unfinished dataset ends
-// critical with message "cancelled". Every outcome is logged: critical
-// failures as CRITICAL ERROR, soft failures as WARNING, skipped datasets
-// and nothing to do as INFO; plan-time outcomes are logged when their
-// dataset's turn comes.
+// skipped as a soft failure. After ctx is cancelled, or a drain is asked
+// for through Interrupts, no new dataset starts, the running ones are
+// waited for, and every unfinished dataset ends critical with message
+// "cancelled". Every outcome is logged: critical failures as CRITICAL
+// ERROR, soft failures as WARNING, skipped datasets and nothing to do as
+// INFO; plan-time outcomes are logged when their dataset's turn comes.
 func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan) []Result {
 	if e.Log == nil {
 		e.Log = slog.New(slog.DiscardHandler)
@@ -82,6 +98,10 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 	if e.Progress == nil {
 		e.Progress = stream.NewRenderer(stream.ProgressNone, nil, nil, time.Now)
 	}
+	e.drained.Store(false)
+	e.abortMu.Lock()
+	e.transfers, e.abortDecided = 0, false
+	e.abortMu.Unlock()
 	r := &runState{
 		e:        e,
 		states:   append([]DatasetState(nil), states...),
@@ -114,9 +134,9 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 }
 
 // runState is the bookkeeping of one Run. Once the pre-phases are over,
-// every access to results, done, logLater, stale, visited, finished and
-// failed holds mu; states[i] and plans[i] are only touched by dataset i's
-// goroutine once it is dispatched.
+// every access to results, done, logLater, stale, visited, finished,
+// failed and running holds mu; states[i] and plans[i] are only touched by
+// dataset i's goroutine once it is dispatched.
 type runState struct {
 	e      *Executor
 	states []DatasetState
@@ -138,57 +158,114 @@ type runState struct {
 	// failed marks the finished datasets that ended other than ok or
 	// nothing to do; their dependents are skipped.
 	failed []bool
+	// running counts the dispatched datasets whose goroutine has not
+	// reported back yet.
+	running int
 }
 
 // dispatch runs up to Opts.Jobs datasets at once, each in its own
 // goroutine, taking the lowest-index dataset whose deps are all finished.
-// Once ctx is cancelled it starts nothing more, waits for the running
-// datasets and ends every unreached one as cancelled.
+// Interrupts is armed for the duration. Once ctx is cancelled or a drain is
+// asked for, it starts nothing more, waits for the running datasets and
+// ends every unreached one as cancelled. A cancellation while transfers
+// run reports the abort (see abortNow); a drain while datasets run logs the
+// drain warning.
 func (r *runState) dispatch(ctx context.Context, deps [][]int) {
 	jobs := max(1, r.e.Opts.Jobs)
+	var drain <-chan struct{}
+	if in := r.e.Interrupts; in != nil {
+		disarm := in.Arm()
+		defer disarm()
+		drain = in.Drain()
+	}
+	aborted := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(aborted)
+		r.e.abortNow()
+	})
+	defer func() {
+		// Once dispatch returns, the abort callback neither runs nor logs.
+		if !stop() {
+			<-aborted
+		}
+	}()
+
 	doneCh := make(chan int)
 	cancelled := ctx.Done()
-	running := 0
+	draining := false
+	onDrain := func() {
+		r.drain()
+		draining, drain = true, nil
+	}
 	for {
-		for running < jobs && ctx.Err() == nil {
-			i, start := r.next(deps, running == 0)
+		for ctx.Err() == nil && !draining {
+			select {
+			case <-drain:
+				onDrain()
+				continue
+			default:
+			}
+			i, start := r.next(deps, jobs)
 			if i < 0 {
 				break
 			}
 			if start {
-				running++
 				go func() {
 					r.runOne(ctx, i)
 					doneCh <- i
 				}()
 			}
 		}
-		if running == 0 {
+		if r.idle() {
 			break
 		}
 		select {
 		case i := <-doneCh:
-			running--
 			r.mu.Lock()
+			r.running--
 			r.settle(i)
 			r.mu.Unlock()
 		case <-cancelled:
 			cancelled = nil // stop starting; keep collecting
+		case <-drain:
+			onDrain()
 		}
 	}
 	r.cancelRest(ctx)
 }
 
-// next marks the next dataset to dispatch as visited and returns its index,
-// or -1 when none is ready. A dataset is ready when all its deps are
-// finished; when idle (nothing running) and none is ready, the lowest
-// unvisited one is taken, as Order does on a cycle. start reports that the
-// dataset must run; otherwise its outcome was settled here (plan-time
-// outcome logged, earlier final result, or skipped for a failed
-// dependency).
-func (r *runState) next(deps [][]int, idle bool) (i int, start bool) {
+// drain records that the user asked to drain the run and, when datasets
+// are running, logs that they are being finished.
+func (r *runState) drain() {
+	r.e.drained.Store(true)
+	r.mu.Lock()
+	n := r.running
+	r.mu.Unlock()
+	if n > 0 {
+		r.e.Log.Warn(fmt.Sprintf("interrupted: finishing %d running dataset(s); press Ctrl-C again to abort them (they will resume on the next run)", n))
+	}
+}
+
+// idle reports whether no dataset is running.
+func (r *runState) idle() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.running == 0
+}
+
+// next marks the next dataset to dispatch as visited and returns its index,
+// or -1 when none is ready or jobs datasets are running. A dataset is ready
+// when all its deps are finished; when idle (nothing running) and none is
+// ready, the lowest unvisited one is taken, as Order does on a cycle. start
+// reports that the dataset must run, and it is counted as running;
+// otherwise its outcome was settled here (plan-time outcome logged, earlier
+// final result, or skipped for a failed dependency).
+func (r *runState) next(deps [][]int, jobs int) (i int, start bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.running >= jobs {
+		return -1, false
+	}
 	i = -1
 	for j, v := range r.visited {
 		if !v && r.ready(deps[j]) {
@@ -196,7 +273,7 @@ func (r *runState) next(deps [][]int, idle bool) (i int, start bool) {
 			break
 		}
 	}
-	if i < 0 && idle {
+	if i < 0 && r.running == 0 {
 		for j, v := range r.visited {
 			if !v {
 				i = j
@@ -221,6 +298,7 @@ func (r *runState) next(deps [][]int, idle bool) (i int, start bool) {
 				return i, false
 			}
 		}
+		r.running++
 		return i, true
 	}
 	r.settle(i)

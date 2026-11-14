@@ -52,6 +52,7 @@ func (e *Executor) transfer(ctx context.Context, st DatasetState, a Action) (int
 	}
 
 	var raw atomic.Int64
+	e.transferStarted()
 	h := e.Progress.Start(st.Source, est)
 	sendOpts := endpoint.SendOpts{Codec: e.SendCodec, Progress: func(n int64) {
 		raw.Store(n)
@@ -103,8 +104,60 @@ func (e *Executor) transfer(ctx context.Context, st DatasetState, a Action) (int
 		err = &sideErr{Target, recvErr}
 	}
 	n := raw.Load()
+	e.transferEnded(ctx)
 	h.Finish(n, err)
 	return n, err
+}
+
+// transferStarted counts a running transfer for the abort warning.
+func (e *Executor) transferStarted() {
+	e.abortMu.Lock()
+	defer e.abortMu.Unlock()
+	e.transfers++
+}
+
+// transferEnded stops counting a transfer. When ctx is cancelled, the abort
+// is decided first, so a transfer ending before the dispatcher's
+// cancellation callback ran still counts in the warning.
+func (e *Executor) transferEnded(ctx context.Context) {
+	e.abortMu.Lock()
+	n := 0
+	if ctx.Err() != nil {
+		n = e.decideAbortLocked()
+	}
+	e.transfers--
+	e.abortMu.Unlock()
+	e.reportAbort(n)
+}
+
+// abortNow decides the abort of this run, when not yet decided, and
+// reports it.
+func (e *Executor) abortNow() {
+	e.abortMu.Lock()
+	n := e.decideAbortLocked()
+	e.abortMu.Unlock()
+	e.reportAbort(n)
+}
+
+// decideAbortLocked returns the number of running transfers the abort
+// warning names the first time it is called in a run, and 0 afterwards.
+// e.abortMu is held.
+func (e *Executor) decideAbortLocked() int {
+	if e.abortDecided {
+		return 0
+	}
+	e.abortDecided = true
+	return e.transfers
+}
+
+// reportAbort logs the abort warning for n running transfers and switches
+// the progress rows to aborting; it does nothing when n is 0.
+func (e *Executor) reportAbort(n int) {
+	if n == 0 {
+		return
+	}
+	e.Log.Warn(fmt.Sprintf("aborting %d running transfer(s); press Ctrl-C again to exit immediately", n))
+	e.Progress.Aborting()
 }
 
 // recvArgs builds the zfs receive flags for send action a.

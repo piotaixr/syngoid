@@ -1016,3 +1016,202 @@ func TestExecutorJobsResultOrder(t *testing.T) {
 		}
 	}
 }
+
+// fakeInterrupts is an Interrupts whose drain the test triggers.
+type fakeInterrupts struct {
+	drain chan struct{}
+	// onArm, when set, is called by Arm.
+	onArm func()
+
+	mu            sync.Mutex
+	arms, disarms int
+}
+
+func newFakeInterrupts() *fakeInterrupts { return &fakeInterrupts{drain: make(chan struct{})} }
+
+func (f *fakeInterrupts) Arm() func() {
+	f.mu.Lock()
+	f.arms++
+	f.mu.Unlock()
+	if f.onArm != nil {
+		f.onArm()
+	}
+	return func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.disarms++
+	}
+}
+
+func (f *fakeInterrupts) Drain() <-chan struct{} { return f.drain }
+
+// trigger asks for a drain.
+func (f *fakeInterrupts) trigger() { close(f.drain) }
+
+func (f *fakeInterrupts) counts() (arms, disarms int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.arms, f.disarms
+}
+
+const drainWarn = "interrupted: finishing 2 running dataset(s); press Ctrl-C again to abort them (they will resume on the next run)"
+
+// countMsgs returns how many of msgs contain sub.
+func countMsgs(msgs []string, sub string) int {
+	n := 0
+	for _, m := range msgs {
+		if strings.Contains(m, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+func wantCancelled(t *testing.T, res []Result, idx ...int) {
+	t.Helper()
+	for _, i := range idx {
+		if res[i].Message != msgCancelled {
+			t.Errorf("result %d (%s): message %q, want cancelled", i, res[i].Source, res[i].Message)
+		}
+	}
+}
+
+func TestExecutorDrain(t *testing.T) {
+	env := flatDatasets(t, 2, "a", "b", "c", "d")
+	g := gateSends(t, env)
+	in := newFakeInterrupts()
+	var ex *Executor
+	done := env.startExec(syncName(10), func(e *Executor) { e.Interrupts, ex = in, e })
+	first := []string{g.waitStarted(), g.waitStarted()}
+	in.trigger()
+	waitFor(t, "the drain warning", func() bool {
+		return countMsgs(env.logs.at(slog.LevelWarn), "interrupted:") > 0
+	})
+	for _, ds := range first {
+		g.open(ds)
+	}
+	res := waitResults(t, done)
+	wantStatuses(t, res, StatusOK, StatusOK, StatusCritical, StatusCritical)
+	wantCancelled(t, res, 2, 3)
+	warns := env.logs.at(slog.LevelWarn)
+	if countMsgs(warns, "interrupted:") != 1 || !containsMsg(warns, drainWarn) {
+		t.Errorf("warnings %q, want exactly one %q", warns, drainWarn)
+	}
+	if !ex.Drained() {
+		t.Error("Drained() = false, want true")
+	}
+	for _, ds := range []string{"tank/c", "tank/d"} {
+		if n := countPrefix(env.src.Calls(), "Send "+ds+"@"); n != 0 {
+			t.Errorf("%d sends of %s after the drain, want 0", n, ds)
+		}
+	}
+}
+
+func TestExecutorDrainFinishesWholePlan(t *testing.T) {
+	env := newExecEnv(t, "tank/data", "backup/data")
+	env.opts.UseHold = true
+	env.sw.Create("tank", "")
+	env.sw.Create("tank/data", "")
+	env.sw.Snap("tank/data", "s1")
+	env.tw.Create("backup", "")
+	t1, t2 := syncName(10), syncName(11)
+	wantStatuses(t, env.run(t1), StatusOK)
+
+	g := gateSends(t, env)
+	in := newFakeInterrupts()
+	n := len(env.src.Calls())
+	var ex *Executor
+	done := env.startExec(t2, func(e *Executor) { e.Interrupts, ex = in, e })
+	g.waitStarted()
+	in.trigger()
+	waitFor(t, "the drain warning", func() bool {
+		return countMsgs(env.logs.at(slog.LevelWarn), "interrupted:") > 0
+	})
+	g.open("tank/data")
+	wantStatuses(t, waitResults(t, done), StatusOK)
+	if c := callsFrom(env.src, n); countPrefix(c, "Release ") == 0 {
+		t.Errorf("no Release after the drain: %q", c)
+	}
+	if !ex.Drained() {
+		t.Error("Drained() = false, want true")
+	}
+}
+
+func TestExecutorDrainNothingRunning(t *testing.T) {
+	env := flatDatasets(t, 2, "a", "b")
+	in := newFakeInterrupts()
+	in.trigger()
+	var ex *Executor
+	done := env.startExec(syncName(10), func(e *Executor) { e.Interrupts, ex = in, e })
+	res := waitResults(t, done)
+	wantStatuses(t, res, StatusCritical, StatusCritical)
+	wantCancelled(t, res, 0, 1)
+	if n := countPrefix(env.src.Calls(), "Send "); n != 0 {
+		t.Errorf("%d sends, want 0: %q", n, env.src.Calls())
+	}
+	if warns := env.logs.at(slog.LevelWarn); countMsgs(warns, "interrupted:") != 0 {
+		t.Errorf("drain warning with nothing running: %q", warns)
+	}
+	if !ex.Drained() {
+		t.Error("Drained() = false, want true")
+	}
+}
+
+func TestExecutorAbortMessage(t *testing.T) {
+	env := flatDatasets(t, 2, "a", "b")
+	states, plans := env.plan(syncName(10))
+	started := make(chan string, 4)
+	env.src.Faults.BlockSend = true
+	env.src.Faults.Send = func(s zfs.SendSpec) error {
+		started <- s.Dataset
+		return nil
+	}
+	rec := &recordingRenderer{}
+	ex := env.executor(syncName(10))
+	ex.Progress = rec
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan []Result, 1)
+	go func() { done <- ex.Run(ctx, states, plans) }()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(waitTimeout):
+			t.Fatalf("sends did not start within %v", waitTimeout)
+		}
+	}
+	cancel()
+	res := waitResults(t, done)
+	wantStatuses(t, res, StatusCritical, StatusCritical)
+	wantCancelled(t, res, 0, 1)
+	const want = "aborting 2 running transfer(s); press Ctrl-C again to exit immediately"
+	if warns := env.logs.at(slog.LevelWarn); countMsgs(warns, "aborting") != 1 || !containsMsg(warns, want) {
+		t.Errorf("warnings %q, want exactly one %q", warns, want)
+	}
+	if n := countPrefix(rec.got(), "aborting"); n != 1 {
+		t.Errorf("Aborting() called %d times, want 1: %q", n, rec.got())
+	}
+	if ex.Drained() {
+		t.Error("Drained() = true after an abort, want false")
+	}
+}
+
+func TestExecutorArmsOnlyWhileDispatching(t *testing.T) {
+	env := flatDatasets(t, 2, "a", "b")
+	in := newFakeInterrupts()
+	snapsAtArm := -1
+	in.onArm = func() { snapsAtArm = countPrefix(env.src.Calls(), "Snapshot ") }
+	states, plans := env.plan(syncName(10))
+	ex := env.executor(syncName(10))
+	ex.Interrupts = in
+	wantStatuses(t, ex.Run(context.Background(), states, plans), StatusOK, StatusOK)
+	if arms, disarms := in.counts(); arms != 1 || disarms != 1 {
+		t.Errorf("Arm called %d times, disarm %d times; want 1 and 1", arms, disarms)
+	}
+	if snapsAtArm < 1 {
+		t.Errorf("Arm called before the sync snapshots were created (%d Snapshot calls)", snapsAtArm)
+	}
+	if ex.Drained() {
+		t.Error("Drained() = true without a drain, want false")
+	}
+}
