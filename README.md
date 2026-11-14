@@ -181,7 +181,8 @@ Options kept from syncoid with the same meaning include `-r/--recursive`, `--ski
 `-j/--jobs N` (default 1) replicates up to N datasets at the same time. A child dataset still starts only after its
 parent when the parent needs a first sync (or `--force-delete`). Each running transfer has its own `--buffer-size`
 buffer, so memory use grows with N, and the progress display shows one row per running transfer. Ctrl-C lets
-running transfers finish and starts no new ones; a second Ctrl-C aborts them, and a third exits at once.
+running transfers finish and starts no new ones; a second Ctrl-C aborts them, and a third exits at once. While
+syngoid is still gathering or planning, the first Ctrl-C aborts and a second exits. SIGTERM and SIGHUP abort.
 
 ### Slow catch-up runs
 

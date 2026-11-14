@@ -702,7 +702,7 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   resume.
 - **Parallel sync (`TestITJobs`):** a tree of seven datasets (root, `a`, `a/x`, `b`, `c`, `c/y`, `d`), each with
   snapshots `s1` and `s2`, replicated with `--recursive --jobs 3` and with `--jobs 1` into separate targets; every
-  dataset has the same user snapshots on both and exactly one sync snapshot. A further `--jobs 3` run after a new
+  dataset has the same user snapshots (`s1`, `s2`) on both and at least one sync snapshot. A further `--jobs 3` run after a new
   snapshot `s3` everywhere brings `s3` to every target.
 - **FreeBSD and OmniOS, nightly:** VM-based jobs (vmactions) running the same suite.
 - **Cross-compile** all targets on every PR.
