@@ -2,10 +2,8 @@ package stream
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
-	"sync"
 	"time"
 )
 
@@ -20,40 +18,53 @@ const (
 	ProgressNone  ProgressMode = "none"
 )
 
-// barThrottle is the minimum interval between two bar redraws.
-const barThrottle = 200 * time.Millisecond
+// minTail is the shortest receive tail worth reporting.
+const minTail = time.Second
 
-// maxETASeconds caps the displayed ETA at 99999:59:59 and keeps the Duration
-// conversion from overflowing when the rate is tiny.
-const maxETASeconds = 99999*3600 + 3599
-
-// Renderer reports the progress of one transfer. It replaces syncoid's pv.
+// Renderer reports the progress of transfers. It replaces syncoid's pv.
 type Renderer interface {
-	// Start begins a transfer labelled label. estimate is the expected total
-	// in bytes, or 0 when unknown.
-	Start(label string, estimate int64)
-	// Update reports the raw bytes transferred so far.
-	Update(rawBytes int64)
-	// Finish ends the transfer after elapsed. err is the transfer outcome;
-	// failures themselves are reported by the caller.
-	Finish(rawBytes int64, elapsed time.Duration, err error)
+	// Start begins a transfer labelled label and returns its handle.
+	// estimate is the expected total in bytes, or 0 when unknown.
+	Start(label string, estimate int64) Transfer
+	// Aborting tells the renderer that running transfers are being aborted.
+	Aborting()
+	// Close stops the renderer and releases what it drew.
+	Close()
 }
 
-// NewRenderer returns the Renderer for mode. ProgressAuto selects the bar when
-// isTTY is true and plain logging otherwise. The bar draws on w; plain logs
-// through log.
-func NewRenderer(mode ProgressMode, w io.Writer, isTTY bool, log *slog.Logger) Renderer {
-	if mode == ProgressAuto {
-		mode = ProgressPlain
-		if isTTY {
-			mode = ProgressBar
-		}
+// Transfer reports the progress of one transfer. Its stream phase runs from
+// Start to Sent; the receive tail runs from Sent to Finish.
+type Transfer interface {
+	// Update reports the raw bytes transferred so far.
+	Update(rawBytes int64)
+	// Sent records that the whole stream has been handed to the receiver.
+	Sent()
+	// Finish ends the transfer. err is the transfer outcome; failures
+	// themselves are reported by the caller.
+	Finish(rawBytes int64, err error)
+}
+
+// ResolveMode turns ProgressAuto into the bar on a TTY and plain logging
+// otherwise. Other modes are returned unchanged.
+func ResolveMode(m ProgressMode, isTTY bool) ProgressMode {
+	if m != ProgressAuto {
+		return m
 	}
+	if isTTY {
+		return ProgressBar
+	}
+	return ProgressPlain
+}
+
+// NewRenderer returns the Renderer for mode. The bar draws its live region on
+// term, which it requires; plain logs through log. ProgressAuto is treated as
+// plain: callers resolve it with ResolveMode first. now is the clock.
+func NewRenderer(mode ProgressMode, term *Terminal, log *slog.Logger, now func() time.Time) Renderer {
 	switch mode {
 	case ProgressBar:
-		return &barRenderer{w: w, now: time.Now}
-	case ProgressPlain:
-		return &plainRenderer{log: log}
+		return newBarRenderer(term, now)
+	case ProgressPlain, ProgressAuto:
+		return &plainRenderer{log: log, now: now}
 	default:
 		return noneRenderer{}
 	}
@@ -61,83 +72,69 @@ func NewRenderer(mode ProgressMode, w io.Writer, isTTY bool, log *slog.Logger) R
 
 type noneRenderer struct{}
 
-func (noneRenderer) Start(string, int64)                {}
-func (noneRenderer) Update(int64)                       {}
-func (noneRenderer) Finish(int64, time.Duration, error) {}
+func (noneRenderer) Start(string, int64) Transfer { return noneTransfer{} }
+func (noneRenderer) Aborting()                    {}
+func (noneRenderer) Close()                       {}
 
-// plainRenderer logs one summary line when the transfer succeeds.
-type plainRenderer struct{ log *slog.Logger }
+type noneTransfer struct{}
 
-func (*plainRenderer) Start(string, int64) {}
-func (*plainRenderer) Update(int64)        {}
+func (noneTransfer) Update(int64)        {}
+func (noneTransfer) Sent()               {}
+func (noneTransfer) Finish(int64, error) {}
 
-func (p *plainRenderer) Finish(rawBytes int64, elapsed time.Duration, err error) {
+// phases times the two phases of one transfer.
+type phases struct {
+	now   func() time.Time
+	start time.Time
+	sent  time.Time // zero until Sent
+}
+
+func newPhases(now func() time.Time) phases { return phases{now: now, start: now()} }
+
+func (p *phases) markSent() { p.sent = p.now() }
+
+// split returns the stream duration at the current time and the receive tail.
+// The tail is zero unless Sent was called.
+func (p *phases) split() (stream, tail time.Duration) {
+	now := p.now()
+	if p.sent.IsZero() {
+		return now.Sub(p.start), 0
+	}
+	return p.sent.Sub(p.start), now.Sub(p.sent)
+}
+
+// plainRenderer logs one summary line when a transfer succeeds.
+type plainRenderer struct {
+	log *slog.Logger
+	now func() time.Time
+}
+
+func (p *plainRenderer) Start(label string, _ int64) Transfer {
+	return &plainTransfer{r: p, label: label, ph: newPhases(p.now)}
+}
+func (*plainRenderer) Aborting() {}
+func (*plainRenderer) Close()    {}
+
+type plainTransfer struct {
+	r     *plainRenderer
+	label string
+	ph    phases
+}
+
+func (*plainTransfer) Update(int64) {}
+func (t *plainTransfer) Sent()      { t.ph.markSent() }
+
+func (t *plainTransfer) Finish(rawBytes int64, err error) {
 	if err != nil {
 		return
 	}
-	p.log.Info(fmt.Sprintf("transferred %s in %s (%s/s)",
-		HumanBytes(rawBytes), HumanDuration(elapsed), HumanBytes(int64(rate(rawBytes, elapsed)))))
-}
-
-// barRenderer redraws a single terminal line.
-type barRenderer struct {
-	w   io.Writer
-	now func() time.Time
-
-	mu       sync.Mutex
-	label    string
-	estimate int64
-	start    time.Time
-	lastDraw time.Time
-	hasDrawn bool
-}
-
-func (b *barRenderer) Start(label string, estimate int64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.label, b.estimate = label, estimate
-	b.start = b.now()
-	b.hasDrawn = false
-}
-
-func (b *barRenderer) Update(rawBytes int64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	now := b.now()
-	if b.hasDrawn && now.Sub(b.lastDraw) < barThrottle {
-		return
+	elapsed, tail := t.ph.split()
+	msg := fmt.Sprintf("%s: transferred %s in %s (%s/s)", t.label,
+		HumanBytes(rawBytes), HumanDuration(elapsed), HumanBytes(int64(rate(rawBytes, elapsed))))
+	if tail >= minTail {
+		msg += fmt.Sprintf("; zfs receive finished %s later", HumanDuration(tail))
 	}
-	b.lastDraw, b.hasDrawn = now, true
-	b.draw(rawBytes, now.Sub(b.start), "")
-}
-
-func (b *barRenderer) Finish(rawBytes int64, elapsed time.Duration, _ error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.draw(rawBytes, elapsed, "\n")
-}
-
-// draw writes one bar line followed by tail.
-func (b *barRenderer) draw(done int64, elapsed time.Duration, tail string) {
-	r := rate(done, elapsed)
-	rateStr := HumanBytes(int64(r)) + "/s"
-	var line string
-	if b.estimate > 0 {
-		pct := int(float64(done) * 100 / float64(b.estimate))
-		if pct > 100 {
-			pct = 100
-		}
-		var eta time.Duration
-		if remaining := b.estimate - done; r > 0 && remaining > 0 {
-			eta = time.Duration(math.Min(math.Round(float64(remaining)/r), maxETASeconds)) * time.Second
-		}
-		line = fmt.Sprintf("\r%s  %3d%%  %s/%s  %s  ETA %s\x1b[K",
-			b.label, pct, HumanBytes(done), HumanBytes(b.estimate), rateStr, HumanDuration(eta))
-	} else {
-		line = fmt.Sprintf("\r%s  %s  %s\x1b[K", b.label, HumanBytes(done), rateStr)
-	}
-	// A failed terminal write must not abort the transfer being shown.
-	_, _ = io.WriteString(b.w, line+tail)
+	t.r.log.Info(msg)
 }
 
 // rate returns bytes per second, or 0 when elapsed is not positive.

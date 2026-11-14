@@ -67,7 +67,7 @@ func (d *dsRun) destroyConflict(ctx context.Context, a Action, name string, err 
 	if d.rounds >= maxReplans {
 		return d.giveUp(err)
 	}
-	if d.e.Confirm != nil && !d.e.Confirm("Destroy conflicting "+name+" (--force-delete)?") {
+	if !d.e.confirm("Destroy conflicting " + name + " (--force-delete)?") {
 		return d.end(StatusCritical, msgDeclined, err)
 	}
 	d.e.Log.Warn("removing existing destination: " + name)

@@ -277,3 +277,55 @@ func TestITDryRunNoChanges(t *testing.T) {
 		t.Fatal("plan output does not announce the sync snapshot")
 	}
 }
+
+func TestITJobs(t *testing.T) {
+	begin(t)
+	src := srcPool + "/jobs"
+	rels := []string{"", "/a", "/a/x", "/b", "/c", "/c/y", "/d"}
+	for _, rel := range rels {
+		zfs(t, "create", src+rel)
+		for _, s := range []string{"s1", "s2"} {
+			writeRandomFile(t, filepath.Join(mountpoint(t, src+rel), s), 1<<20)
+			zfs(t, "snapshot", src+rel+"@"+s)
+		}
+	}
+
+	syngoidOK(t, "--recursive", "--jobs", "3", src, dstPool+"/j3")
+	syngoidOK(t, "--recursive", "--jobs", "1", src, dstPool+"/j1")
+
+	// Sync snapshots differ between the runs (the -I stream of a fresh
+	// target also carries the older one); compare the user snapshots and
+	// require at least one sync snapshot per target.
+	for _, rel := range rels {
+		d3, d1 := dstPool+"/j3"+rel, dstPool+"/j1"+rel
+		for _, d := range []string{d3, d1} {
+			all := snaps(t, d)
+			if len(withoutSync(all)) == len(all) {
+				t.Fatalf("%s has no sync snapshot: %q", d, all)
+			}
+		}
+		got3, got1 := shorts(withoutSync(snaps(t, d3))), shorts(withoutSync(snaps(t, d1)))
+		equal(t, d3+" and "+d1+" user snapshots", got3, got1)
+		equal(t, d3+" user snapshots", got3, []string{"s1", "s2"})
+	}
+
+	for _, rel := range rels {
+		zfs(t, "snapshot", src+rel+"@s3")
+	}
+	syngoidOK(t, "--recursive", "--jobs", "3", src, dstPool+"/j3")
+	for _, rel := range rels {
+		d3 := dstPool + "/j3" + rel
+		if !slices.Contains(snaps(t, d3), d3+"@s3") {
+			t.Fatalf("%s has no s3 after the second parallel run", d3)
+		}
+	}
+}
+
+// shorts returns the part after the '@' of each snapshot name.
+func shorts(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = short(n)
+	}
+	return out
+}

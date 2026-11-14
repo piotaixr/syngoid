@@ -9,9 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -22,14 +20,15 @@ import (
 	"github.com/piotaixr/syngoid/internal/cli"
 	"github.com/piotaixr/syngoid/internal/dist"
 	"github.com/piotaixr/syngoid/internal/endpoint"
+	"github.com/piotaixr/syngoid/internal/sigctl"
 	"github.com/piotaixr/syngoid/internal/sshx"
 	"github.com/piotaixr/syngoid/internal/zfs"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer stop()
-	go forceExitOnSecondSignal(ctx)
+	ctl, ctx := sigctl.New(context.Background(), os.Exit)
+	ctl.Start()
+	defer ctl.Stop()
 
 	var logger *slog.Logger
 	stdinIsTTY := isTTY(os.Stdin)
@@ -39,6 +38,8 @@ func main() {
 		Stderr:      os.Stderr,
 		StdinIsTTY:  stdinIsTTY,
 		StderrIsTTY: isTTY(os.Stderr),
+		TermSize:    stderrSize,
+		Interrupts:  ctl,
 		Hostname:    os.Hostname,
 		Now:         time.Now,
 		NewLocal: func(sudo bool) endpoint.Endpoint {
@@ -52,7 +53,7 @@ func main() {
 		PoolExists:  (&pools{exec: zfs.OSExec{}, stderr: os.Stderr}).exists,
 	}
 	code := app.Main(ctx, os.Args[1:], env)
-	stop()
+	ctl.Stop()
 	os.Exit(code)
 }
 
@@ -90,17 +91,6 @@ func (c poolConnector) Endpoint(ctx context.Context, loc cli.Location, sudo bool
 
 func (c poolConnector) Close() error { return c.pool.Close() }
 
-// forceExitOnSecondSignal waits for the first SIGINT, SIGTERM or SIGHUP (which
-// cancels ctx and starts the graceful shutdown), then exits with code 2 on
-// the next SIGINT.
-func forceExitOnSecondSignal(ctx context.Context) {
-	<-ctx.Done()
-	again := make(chan os.Signal, 1)
-	signal.Notify(again, syscall.SIGINT)
-	<-again
-	os.Exit(2)
-}
-
 // pools answers whether local ZFS pools exist, for telling host:dataset
 // from a local dataset whose pool name contains a colon. It runs before the
 // logger exists, so its warning goes straight to stderr.
@@ -134,6 +124,19 @@ func (p *pools) exists(name string) bool {
 		}
 	}
 	return false
+}
+
+// stderrSize returns the width and height of the stderr terminal: width 80
+// and height 0 when unknown.
+func stderrSize() (width, height int) {
+	w, h, err := term.GetSize(int(os.Stderr.Fd()))
+	if err != nil {
+		return 80, 0
+	}
+	if w <= 0 {
+		w = 80
+	}
+	return w, max(h, 0)
 }
 
 // isTTY reports whether f is a terminal; /dev/null and pipes are not.

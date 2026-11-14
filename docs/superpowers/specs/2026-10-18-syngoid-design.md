@@ -27,7 +27,6 @@ ZFS datasets between local and/or remote hosts using `zfs send`/`zfs receive`.
 ### 1.2 Non-goals (v1)
 
 - CLI flag compatibility (a cleaned-up CLI with deprecated aliases is provided; see §3).
-- Parallel transfers (the executor is DAG-shaped so a worker pool can be added later).
 - Bandwidth limiting.
 - Insecure direct (unencrypted TCP) connections.
 - Restricted-shell targets that can run only `zfs` (the agent binary must be executable on every remote).
@@ -47,7 +46,7 @@ ZFS datasets between local and/or remote hosts using `zfs send`/`zfs receive`.
 | D6 | Drop `--insecure-direct-connection` | Not needed. |
 | D7 | Architecture A: thin agent, one multiplexed SSH session per host | Logic centralized and testable; one SSH auth per host; mux allows control + data + events on one connection. |
 | D8 | Pure planner + executor | Enables `--dry-run`, `--confirm`, table-driven tests. |
-| D9 | No parallel transfers in v1 | Deferred; batching gives most of the speedup. |
+| D9 | Parallel transfers via `--jobs` (opt-in, default 1) | Batching gives most of the speedup; `--jobs` overlaps the per-snapshot receive latency of independent datasets. |
 | D10 | No bandwidth limit in v1 | Possibly never needed. Passing the old flags is an error, not silently ignored. |
 | D11 | OTLP/HTTP log export from the initiator | Observability without remote network requirements; HTTP avoids the gRPC dependency weight. |
 | D12 | minisign-signed `SHA256SUMS`, key embedded, CI secret with approval-gated releases | mise-style verification; simple pure-Go verification. |
@@ -115,6 +114,7 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
 |---|---|
 | `--sudo`, `--source-sudo`, `--target-sudo` | Prefix `zfs` invocations with `sudo -n` on both / one side. |
 | `-n/--dry-run` | Gather, preflight, plan; print the plan; exit without changes. |
+| `-j/--jobs N` | Number of datasets replicated at the same time (default 1, at least 1); each running transfer uses its own `--buffer-size` buffer. |
 | `--confirm` | Print the plan and ask y/N before executing; also prompts for destructive runtime remediations. Requires a TTY (error otherwise). |
 | `--no-download` | Never download agent binaries; use self or local store only. |
 | `--download-url=TEMPLATE` | Mirror URL template with `{version}`, `{os}`, `{arch}`, `{file}` placeholders. Default: `https://github.com/piotaixr/syngoid/releases/download/v{version}/{file}`. |
@@ -481,8 +481,9 @@ not-yet-created sync snapshot use the `written@<base>` property (incremental) or
 - A child dataset whose parent does not exist on the target depends on the parent's full send.
 - A clone depends on its origin dataset's send. Ordering is a full topological sort by origin (fixes clone-of-clone
   ordering).
-- v1 executes sequentially in topological order. If a dataset fails critically, its dependents are marked
-  `skipped (dependency failed)` (soft); unrelated datasets continue.
+- v1 executes up to `--jobs` datasets at once in dependency order, lowest listing index first: a dataset
+  starts once every dataset it depends on has a final result. If a dataset fails critically, its dependents are
+  marked `skipped (dependency failed)` (soft); unrelated datasets continue. Results keep listing order.
 - `CreateSyncSnaps` runs first: one `zfs snapshot a@s b@s …` per pool (atomic, one txg). If it fails, fall back to
   per-dataset creation so one bad dataset does not block the rest; datasets whose snapshot failed are critical.
   Afterwards the source snapshot list is refreshed (one batched `zfs get`) to obtain guids.
@@ -558,13 +559,24 @@ Compress next to `zfs send`, decompress next to `zfs receive`, only when a netwo
 
 Size estimate from `SendEstimate` (`zfs send -nvP`, minimum 4096 bytes when known, `0` = unknown). The sending side
 counts **uncompressed** bytes and reports them (remote: `Event{kind:"progress"}` every 500 ms) so progress is
-comparable to the estimate. `bar`: one updating line (percent, bytes, rate, ETA). `plain`: one line at start and one
-at end of each transfer (size, duration, rate). `none`: nothing. `--quiet` implies `none`.
+comparable to the estimate. `bar`: a live region at the bottom of stderr with one row per running transfer
+(percent, bytes, rate, ETA; a "waiting for zfs receive" row once the stream is sent; "aborting…" rows when running
+transfers are being aborted), redrawn every 200 ms. Rows are cut to the terminal width; when they do not fit in the
+terminal height, the region shows as many as fit and a final "… and K more" row. Console log lines print above the
+region; while a `--confirm` question is on screen they are held and printed once it is answered. When a transfer
+finishes, its row leaves the region and a permanent final line is printed above it. That line's rate covers the
+stream phase only (start until the whole stream was handed to `zfs receive`), and the line ends with
+`  zfs receive +H:MM:SS` when the receive took at least 1 s longer. `plain`: one line at the end of each transfer,
+`<dataset>: transferred <bytes> in <H:MM:SS> (<rate>/s)`, plus `; zfs receive finished <H:MM:SS> later` when that tail
+is at least 1 s (size, stream duration, rate). `none`: nothing. `--quiet` implies `none`.
 
 ### 9.4 Cancellation
 
 Context cancellation closes the data streams; agents kill `zfs send`/`receive` process groups. Thanks to
 `receive -s`, a resume token remains for the next run.
+
+A first Ctrl-C during dispatch drains instead (§10.3): running datasets finish their whole remaining plan (send,
+release, bookmark, prune) and nothing new starts.
 
 ## 10. Errors, logging, observability, signals
 
@@ -598,8 +610,12 @@ Context cancellation closes the data streams; agents kill `zfs send`/`receive` p
 
 ### 10.3 Signals
 
-- First SIGINT/SIGTERM: cancel the run (§9.4), start no new actions, print the summary, exit 2.
-- Second SIGINT: exit immediately.
+- First SIGINT while the executor is dispatching: drain (start no new dataset, let running ones finish), warn
+  `interrupted: finishing N running dataset(s); press Ctrl-C again to abort them (they will resume on the next run)`.
+  Second SIGINT: abort. SIGINT while not dispatching (gather, preflight, planning), SIGTERM and SIGHUP: abort, i.e.
+  cancel the run (§9.4), start no new actions, warn `aborting N running transfer(s); press Ctrl-C again to exit
+  immediately` when transfers run, print the summary, exit 2. SIGINT after an abort: exit immediately (2).
+  SIGTERM/SIGHUP after an abort do nothing more. A drained run also exits 2.
 - Sync snapshots left by interrupted runs are removed by the next successful run's pruning.
 
 ## 11. Release, distribution, trust
@@ -708,6 +724,10 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   `ssh localhost` as an unprivileged user with only `zfs allow` grants (real bootstrap push, handshake, preflight
   pass/fail — verifying the printed `zfs allow` command fixes it — and `receive -u`); interruption mid-send then
   resume.
+- **Parallel sync (`TestITJobs`):** a tree of seven datasets (root, `a`, `a/x`, `b`, `c`, `c/y`, `d`), each with
+  snapshots `s1` and `s2`, replicated with `--recursive --jobs 3` and with `--jobs 1` into separate targets; every
+  dataset has the same user snapshots (`s1`, `s2`) on both and at least one sync snapshot. A further `--jobs 3` run
+  after a new snapshot `s3` everywhere brings `s3` to every target.
 - **FreeBSD and OmniOS, nightly:** VM-based jobs (vmactions) running the same suite.
 - **Cross-compile** all targets on every PR.
 
@@ -724,7 +744,7 @@ TDD per unit; `go test -race`, `go vet`, `golangci-lint` on every PR. No coverag
 
 ## 13. Deferred (explicitly out of v1)
 
-Parallel transfers (`--jobs`), bandwidth limiting, OTel traces and metrics, JSON plan output, insecure direct
+Bandwidth limiting, OTel traces and metrics, JSON plan output, insecure direct
 connections, plain `zfs send | ssh zfs recv` fallback for restricted-shell hosts, self-update, Homebrew tap,
 FreeBSD port, moving data streams to separate SSH sessions, deb/rpm packages, an all-platforms remote-bins tarball,
 nightly FreeBSD/OmniOS CI jobs.

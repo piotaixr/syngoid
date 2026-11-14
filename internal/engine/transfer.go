@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/piotaixr/syngoid/internal/endpoint"
 	"github.com/piotaixr/syngoid/internal/stream"
@@ -53,12 +52,12 @@ func (e *Executor) transfer(ctx context.Context, st DatasetState, a Action) (int
 	}
 
 	var raw atomic.Int64
+	e.transferStarted()
+	h := e.Progress.Start(st.Source, est)
 	sendOpts := endpoint.SendOpts{Codec: e.SendCodec, Progress: func(n int64) {
 		raw.Store(n)
-		e.Progress.Update(n)
+		h.Update(n)
 	}}
-	e.Progress.Start(st.Source, est)
-	start := time.Now()
 
 	// Send and copy failures reach the receive through the pipes, so ctx2 is
 	// only cancelled when the receive fails: cancelling it earlier could kill
@@ -84,6 +83,7 @@ func (e *Executor) transfer(ctx context.Context, st DatasetState, a Action) (int
 			_ = bW.CloseWithError(fmt.Errorf("%w: %w", errUpstream, copyErr))
 			return
 		}
+		h.Sent()
 		_ = bW.Close()
 	}()
 	recvErr := e.Dst.Receive(ctx2, zfs.RecvSpec{Dataset: st.Target, Args: args}, e.RecvCodec, bR)
@@ -104,8 +104,60 @@ func (e *Executor) transfer(ctx context.Context, st DatasetState, a Action) (int
 		err = &sideErr{Target, recvErr}
 	}
 	n := raw.Load()
-	e.Progress.Finish(n, time.Since(start), err)
+	e.transferEnded(ctx)
+	h.Finish(n, err)
 	return n, err
+}
+
+// transferStarted counts a running transfer for the abort warning.
+func (e *Executor) transferStarted() {
+	e.abortMu.Lock()
+	defer e.abortMu.Unlock()
+	e.transfers++
+}
+
+// transferEnded stops counting a transfer. When ctx is cancelled, the abort
+// is decided first, so a transfer ending before the dispatcher's
+// cancellation callback ran still counts in the warning.
+func (e *Executor) transferEnded(ctx context.Context) {
+	e.abortMu.Lock()
+	n := 0
+	if ctx.Err() != nil {
+		n = e.decideAbortLocked()
+	}
+	e.transfers--
+	e.abortMu.Unlock()
+	e.reportAbort(n)
+}
+
+// abortNow decides the abort of this run, when not yet decided, and
+// reports it.
+func (e *Executor) abortNow() {
+	e.abortMu.Lock()
+	n := e.decideAbortLocked()
+	e.abortMu.Unlock()
+	e.reportAbort(n)
+}
+
+// decideAbortLocked returns the number of running transfers the abort
+// warning names the first time it is called in a run, and 0 afterwards.
+// e.abortMu is held.
+func (e *Executor) decideAbortLocked() int {
+	if e.abortDecided {
+		return 0
+	}
+	e.abortDecided = true
+	return e.transfers
+}
+
+// reportAbort logs the abort warning for n running transfers and switches
+// the progress rows to aborting; it does nothing when n is 0.
+func (e *Executor) reportAbort(n int) {
+	if n == 0 {
+		return
+	}
+	e.Log.Warn(fmt.Sprintf("aborting %d running transfer(s); press Ctrl-C again to exit immediately", n))
+	e.Progress.Aborting()
 }
 
 // recvArgs builds the zfs receive flags for send action a.
@@ -137,13 +189,21 @@ func (e *Executor) recvArgs(ctx context.Context, st DatasetState, a Action) ([]s
 // (spec §6.1).
 func (e *Executor) warnDroppedProps(st DatasetState, local map[string]string) {
 	dropped := UnprivDroppedProps(local)
-	if len(dropped) == 0 || e.warnedUnpriv[st.Source] {
+	if len(dropped) == 0 {
 		return
 	}
-	if e.warnedUnpriv == nil {
-		e.warnedUnpriv = map[string]bool{}
+	e.mu.Lock()
+	warned := e.warnedUnpriv[st.Source]
+	if !warned {
+		if e.warnedUnpriv == nil {
+			e.warnedUnpriv = map[string]bool{}
+		}
+		e.warnedUnpriv[st.Source] = true
 	}
-	e.warnedUnpriv[st.Source] = true
+	e.mu.Unlock()
+	if warned {
+		return
+	}
 	verb := "they cannot"
 	if len(dropped) == 1 {
 		verb = "it cannot"

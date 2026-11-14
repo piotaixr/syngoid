@@ -28,8 +28,13 @@ type Env struct {
 	Stderr      io.Writer
 	StdinIsTTY  bool
 	StderrIsTTY bool
-	Hostname    func() (string, error)
-	Now         func() time.Time
+	// TermSize reports the width and height of the stderr terminal; a height
+	// of 0 means unknown. It may be nil, meaning 80 columns and unknown height.
+	TermSize func() (width, height int)
+	// Interrupts lets the user drain a run. It may be nil, meaning never.
+	Interrupts engine.Interrupts
+	Hostname   func() (string, error)
+	Now        func() time.Time
 	// NewLocal returns the endpoint of the local host, running zfs through
 	// sudo when sudo is set.
 	NewLocal func(sudo bool) endpoint.Endpoint
@@ -113,7 +118,24 @@ func (p *prompter) ask(question string) bool {
 // runSync implements the sync and permissions commands.
 func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	o := parsed.Options
-	log := logx.New(logx.Config{Stdout: env.Stdout, Stderr: env.Stderr, Quiet: o.Quiet, Debug: o.Debug})
+	mode := stream.ResolveMode(o.Progress, env.StderrIsTTY)
+	if o.Quiet {
+		mode = stream.ProgressNone
+	}
+	stdout, stderr := env.Stdout, env.Stderr
+	var term *stream.Terminal
+	if mode == stream.ProgressBar {
+		size := env.TermSize
+		if size == nil {
+			size = func() (int, int) { return 80, 0 }
+		}
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		term = stream.NewTerminal(env.Stderr, size, ticker.C)
+		defer term.Close()
+		stdout, stderr = term.Writer(env.Stdout), term.Writer(env.Stderr)
+	}
+	log := logx.New(logx.Config{Stdout: stdout, Stderr: stderr, Quiet: o.Quiet, Debug: o.Debug})
 	if env.LoggerReady != nil {
 		env.LoggerReady(log)
 	}
@@ -188,33 +210,35 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 			}
 			return 0
 		}
-		confirm = p.ask
+		confirm = func(q string) bool {
+			if term != nil {
+				defer term.Suspend()()
+			}
+			return p.ask(q)
+		}
 	}
 
 	dstInfo, err := dst.Info(ctx)
 	if err != nil {
 		return criticalf(env, "target host info: %v", err)
 	}
-	mode := o.Progress
-	if o.Quiet {
-		mode = stream.ProgressNone
-	}
 	codec := streamCodec(o)
 	ex := &engine.Executor{
 		Src: src, Dst: dst, Opts: o, PlanOpts: po, Log: log,
-		Progress:          stream.NewRenderer(mode, env.Stderr, env.StderrIsTTY, log),
+		Progress:          stream.NewRenderer(mode, term, log, env.Now),
 		Confirm:           confirm,
 		SendCodec:         codec,
 		RecvCodec:         codec,
 		UnprivLinuxTarget: dstInfo.OS == "linux" && dstInfo.UID != 0 && !o.TargetSudo,
 		SyncSnap:          syncSnap,
+		Interrupts:        env.Interrupts,
 	}
 	start := env.Now()
 	results := ex.Run(ctx, states, plans)
 	if !o.Quiet {
 		RenderSummary(env.Stdout, results, env.Now().Sub(start))
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || ex.Drained() {
 		return 2
 	}
 	return engine.ExitCode(results)
