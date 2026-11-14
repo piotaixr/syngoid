@@ -27,7 +27,6 @@ ZFS datasets between local and/or remote hosts using `zfs send`/`zfs receive`.
 ### 1.2 Non-goals (v1)
 
 - CLI flag compatibility (a cleaned-up CLI with deprecated aliases is provided; see §3).
-- Parallel transfers (the executor is DAG-shaped so a worker pool can be added later).
 - Bandwidth limiting.
 - Insecure direct (unencrypted TCP) connections.
 - Restricted-shell targets that can run only `zfs` (the agent binary must be executable on every remote).
@@ -46,7 +45,7 @@ ZFS datasets between local and/or remote hosts using `zfs send`/`zfs receive`.
 | D6 | Drop `--insecure-direct-connection` | Not needed. |
 | D7 | Architecture A: thin agent, one multiplexed SSH session per host | Logic centralized and testable; one SSH auth per host; mux allows control + data + events on one connection. |
 | D8 | Pure planner + executor | Enables `--dry-run`, `--confirm`, table-driven tests. |
-| D9 | No parallel transfers in v1 | Deferred; batching gives most of the speedup. |
+| D9 | Parallel transfers via `--jobs` (opt-in, default 1) | Batching gives most of the speedup; `--jobs` overlaps the per-snapshot receive latency of independent datasets. |
 | D10 | No bandwidth limit in v1 | Possibly never needed. Passing the old flags is an error, not silently ignored. |
 | D11 | OTLP/HTTP log export from the initiator | Observability without remote network requirements; HTTP avoids the gRPC dependency weight. |
 | D12 | minisign-signed `SHA256SUMS`, key embedded, CI secret with approval-gated releases | mise-style verification; simple pure-Go verification. |
@@ -114,6 +113,7 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
 |---|---|
 | `--sudo`, `--source-sudo`, `--target-sudo` | Prefix `zfs` invocations with `sudo -n` on both / one side. |
 | `-n/--dry-run` | Gather, preflight, plan; print the plan; exit without changes. |
+| `-j/--jobs N` | Number of datasets replicated at the same time (default 1, at least 1); each running transfer uses its own `--buffer-size` buffer. |
 | `--confirm` | Print the plan and ask y/N before executing; also prompts for destructive runtime remediations. Requires a TTY (error otherwise). |
 | `--no-download` | Never download agent binaries; use self or local store only. |
 | `--download-url=TEMPLATE` | Mirror URL template with `{version}`, `{os}`, `{arch}`, `{file}` placeholders. Default: `https://github.com/piotaixr/syngoid/releases/download/v{version}/{file}`. |
@@ -480,8 +480,9 @@ not-yet-created sync snapshot use the `written@<base>` property (incremental) or
 - A child dataset whose parent does not exist on the target depends on the parent's full send.
 - A clone depends on its origin dataset's send. Ordering is a full topological sort by origin (fixes clone-of-clone
   ordering).
-- v1 executes sequentially in topological order. If a dataset fails critically, its dependents are marked
-  `skipped (dependency failed)` (soft); unrelated datasets continue.
+- v1 executes up to `--jobs` datasets at once in dependency order, lowest listing index first: a dataset
+  starts once every dataset it depends on has a final result. If a dataset fails critically, its dependents are
+  marked `skipped (dependency failed)` (soft); unrelated datasets continue. Results keep listing order.
 - `CreateSyncSnaps` runs first: one `zfs snapshot a@s b@s …` per pool (atomic, one txg). If it fails, fall back to
   per-dataset creation so one bad dataset does not block the rest; datasets whose snapshot failed are critical.
   Afterwards the source snapshot list is refreshed (one batched `zfs get`) to obtain guids.
@@ -708,7 +709,7 @@ TDD per unit; `go test -race`, `go vet`, `golangci-lint` on every PR. No coverag
 
 ## 13. Deferred (explicitly out of v1)
 
-Parallel transfers (`--jobs`), bandwidth limiting, OTel traces and metrics, JSON plan output, insecure direct
+Bandwidth limiting, OTel traces and metrics, JSON plan output, insecure direct
 connections, plain `zfs send | ssh zfs recv` fallback for restricted-shell hosts, self-update, Homebrew tap,
 FreeBSD port, moving data streams to separate SSH sessions.
 

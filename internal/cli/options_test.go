@@ -297,3 +297,23 @@ func TestParseBufferSize(t *testing.T) {
 		}
 	}
 }
+
+func TestParseJobs(t *testing.T) {
+	if got := parse(t, "a", "b").Options.Jobs; got != 1 {
+		t.Errorf("default Jobs = %d, want 1", got)
+	}
+	for _, args := range [][]string{{"-j", "4"}, {"--jobs=4"}, {"--jobs", "4"}} {
+		if got := parse(t, append(args, "a", "b")...).Options.Jobs; got != 4 {
+			t.Errorf("%q: Jobs = %d, want 4", args, got)
+		}
+	}
+	for _, bad := range []string{"0", "-1"} {
+		err := parseErr(t, "--jobs="+bad, "a", "b")
+		if !strings.Contains(err.Error(), "--jobs must be at least 1") {
+			t.Errorf("--jobs=%s: error %q", bad, err)
+		}
+	}
+	if err := parseErr(t, "--jobs", "abc", "a", "b"); !strings.Contains(err.Error(), "jobs") {
+		t.Errorf("--jobs abc: error %q does not mention jobs", err)
+	}
+}

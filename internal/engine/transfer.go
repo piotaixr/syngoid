@@ -136,13 +136,21 @@ func (e *Executor) recvArgs(ctx context.Context, st DatasetState, a Action) ([]s
 // (spec §6.1).
 func (e *Executor) warnDroppedProps(st DatasetState, local map[string]string) {
 	dropped := UnprivDroppedProps(local)
-	if len(dropped) == 0 || e.warnedUnpriv[st.Source] {
+	if len(dropped) == 0 {
 		return
 	}
-	if e.warnedUnpriv == nil {
-		e.warnedUnpriv = map[string]bool{}
+	e.mu.Lock()
+	warned := e.warnedUnpriv[st.Source]
+	if !warned {
+		if e.warnedUnpriv == nil {
+			e.warnedUnpriv = map[string]bool{}
+		}
+		e.warnedUnpriv[st.Source] = true
 	}
-	e.warnedUnpriv[st.Source] = true
+	e.mu.Unlock()
+	if warned {
+		return
+	}
 	verb := "they cannot"
 	if len(dropped) == 1 {
 		verb = "it cannot"

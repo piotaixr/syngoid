@@ -49,6 +49,8 @@ type Options struct {
 	Compress   stream.Codec
 	BufferSize int64
 	Progress   stream.ProgressMode
+	// Jobs is the number of datasets replicated at the same time.
+	Jobs int
 
 	SSHOptions []string
 	SSHConfig  string
@@ -105,6 +107,7 @@ type raw struct {
 	sendOptions, recvOptions                    string
 
 	compress, bufferSize, progress string
+	jobs                           int
 
 	sshOptions []string
 	sshConfig  string
@@ -161,6 +164,7 @@ func newFlagSet(r *raw) *pflag.FlagSet {
 	fs.StringVar(&r.compress, "compress", "zstd-fast", "network compression: zstd-fast|zstd|lz4|gzip|none")
 	fs.StringVar(&r.bufferSize, "buffer-size", "16M", "relay buffer size, e.g. 16M")
 	fs.StringVar(&r.progress, "progress", "auto", "progress display: auto|bar|plain|none")
+	fs.IntVarP(&r.jobs, "jobs", "j", 1, "number of datasets replicated at the same time; each running transfer uses its own --buffer-size buffer")
 
 	fs.StringArrayVarP(&r.sshOptions, "ssh-option", "o", nil, "SSH option (repeatable)")
 	fs.StringVar(&r.sshConfig, "ssh-config", "", "SSH config file")
@@ -276,6 +280,7 @@ func (r *raw) build(fs *pflag.FlagSet, localPoolExists func(string) bool, pos []
 		NoResume: r.noResume, NoCloneHandling: r.noCloneHandling, DumpSnaps: r.dumpSnaps,
 		Debug: r.debug, Quiet: r.quiet,
 		Progress:   stream.ProgressMode(r.progress),
+		Jobs:       r.jobs,
 		SSHConfig:  r.sshConfig,
 		SourceSudo: r.sudo || r.sourceSudo, TargetSudo: r.sudo || r.targetSudo,
 		DryRun: r.dryRun, Confirm: r.confirm,
@@ -343,6 +348,9 @@ func (r *raw) build(fs *pflag.FlagSet, localPoolExists func(string) bool, pos []
 	var err error
 	if o.BufferSize, err = parseSize(bufferSize); err != nil {
 		return nil, nil, fmt.Errorf("--buffer-size: %w", err)
+	}
+	if o.Jobs < 1 {
+		return nil, nil, errors.New("--jobs must be at least 1")
 	}
 	switch o.Progress {
 	case stream.ProgressAuto, stream.ProgressBar, stream.ProgressPlain, stream.ProgressNone:

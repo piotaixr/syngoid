@@ -385,29 +385,32 @@ func TestExecutorDependencySkip(t *testing.T) {
 			env.sw.SetProp("tank/data", "syncoid:sync", "false")
 		}, StatusSkipped},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			env := newExecEnv(t, "tank", "backup")
-			env.opts.Recursive, env.opts.SkipParent = true, true
-			env.sw.Create("tank", "")
-			for _, ds := range []string{"tank/data", "tank/data/a", "tank/other"} {
-				env.sw.Create(ds, "")
-				env.sw.Snap(ds, "s1")
-			}
-			env.tw.Create("backup", "")
-			tt.setup(env)
-			res := env.run(syncName(10))
-			wantStatuses(t, res, tt.parent, StatusSoft, StatusOK)
-			if want := "skipped: dependency tank/data failed"; res[1].Message != want {
-				t.Errorf("message %q, want %q", res[1].Message, want)
-			}
-			if n := countPrefix(env.src.Calls(), "Send tank/data/a@"); n != 0 {
-				t.Errorf("dependent dataset was sent %d times", n)
-			}
-			if n := countPrefix(env.dst.Calls(), "Receive backup/data/a"); n != 0 {
-				t.Errorf("dependent dataset was received %d times", n)
-			}
-		})
+	for _, jobs := range []int{1, 3} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("jobs=%d/%s", jobs, tt.name), func(t *testing.T) {
+				env := newExecEnv(t, "tank", "backup")
+				env.opts.Recursive, env.opts.SkipParent = true, true
+				env.opts.Jobs = jobs
+				env.sw.Create("tank", "")
+				for _, ds := range []string{"tank/data", "tank/data/a", "tank/other"} {
+					env.sw.Create(ds, "")
+					env.sw.Snap(ds, "s1")
+				}
+				env.tw.Create("backup", "")
+				tt.setup(env)
+				res := env.run(syncName(10))
+				wantStatuses(t, res, tt.parent, StatusSoft, StatusOK)
+				if want := "skipped: dependency tank/data failed"; res[1].Message != want {
+					t.Errorf("message %q, want %q", res[1].Message, want)
+				}
+				if n := countPrefix(env.src.Calls(), "Send tank/data/a@"); n != 0 {
+					t.Errorf("dependent dataset was sent %d times", n)
+				}
+				if n := countPrefix(env.dst.Calls(), "Receive backup/data/a"); n != 0 {
+					t.Errorf("dependent dataset was received %d times", n)
+				}
+			})
+		}
 	}
 }
 
@@ -723,5 +726,293 @@ func TestExecutorTransferPhases(t *testing.T) {
 	got := rec.got()
 	if len(got) != 2 || got[0] != "start tank/a" || !strings.HasPrefix(got[1], "finish tank/a ") || !strings.Contains(got[1], "injected") {
 		t.Errorf("renderer events on send failure = %q, want start then finish with injected", got)
+	}
+}
+
+// waitTimeout bounds every wait of the parallel executor tests.
+const waitTimeout = 5 * time.Second
+
+// sendGate holds each dataset in its first send until the test releases it,
+// recording which datasets are inside a send at the same time.
+type sendGate struct {
+	t       *testing.T
+	mu      sync.Mutex
+	running map[string]bool
+	max     int
+	entered map[string]bool
+	release map[string]chan struct{}
+	// onEnter, when set, is called under mu with the running set before the
+	// dataset joins it.
+	onEnter func(ds string, running map[string]bool)
+	started chan string
+}
+
+// gateSends installs a sendGate as env.src's Send fault hook. Every gate
+// left closed is released when the test ends.
+func gateSends(t *testing.T, env *execEnv) *sendGate {
+	g := &sendGate{
+		t: t, running: map[string]bool{}, entered: map[string]bool{},
+		release: map[string]chan struct{}{}, started: make(chan string, 16),
+	}
+	env.src.Faults.Send = g.hook
+	t.Cleanup(func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		for ds, ch := range g.release {
+			select {
+			case <-ch:
+			default:
+				close(ch)
+			}
+			delete(g.release, ds)
+		}
+	})
+	return g
+}
+
+func (g *sendGate) gate(ds string) chan struct{} {
+	ch, ok := g.release[ds]
+	if !ok {
+		ch = make(chan struct{})
+		g.release[ds] = ch
+	}
+	return ch
+}
+
+func (g *sendGate) hook(s zfs.SendSpec) error {
+	ds := s.Dataset
+	g.mu.Lock()
+	if g.entered[ds] {
+		g.mu.Unlock()
+		return nil
+	}
+	g.entered[ds] = true
+	if g.onEnter != nil {
+		g.onEnter(ds, g.running)
+	}
+	g.running[ds] = true
+	g.max = max(g.max, len(g.running))
+	ch := g.gate(ds)
+	g.mu.Unlock()
+	g.started <- ds
+	<-ch
+	g.mu.Lock()
+	delete(g.running, ds)
+	g.mu.Unlock()
+	return nil
+}
+
+// waitStarted returns the next dataset to enter its send.
+func (g *sendGate) waitStarted() string {
+	g.t.Helper()
+	select {
+	case ds := <-g.started:
+		return ds
+	case <-time.After(waitTimeout):
+		g.t.Fatalf("no send started within %v", waitTimeout)
+		return ""
+	}
+}
+
+// noneStarted fails when a dataset enters its send within d.
+func (g *sendGate) noneStarted(d time.Duration) {
+	g.t.Helper()
+	select {
+	case ds := <-g.started:
+		g.t.Fatalf("%s started its send while the running ones are held", ds)
+	case <-time.After(d):
+	}
+}
+
+// open lets dataset ds finish its send.
+func (g *sendGate) open(ds string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	close(g.gate(ds))
+}
+
+func (g *sendGate) maxRunning() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.max
+}
+
+// startExec runs the executor in the background on a state planned now;
+// each tweak adjusts the executor first.
+func (e *execEnv) startExec(syncSnap string, tweaks ...func(*Executor)) <-chan []Result {
+	e.t.Helper()
+	states, plans := e.plan(syncSnap)
+	ex := e.executor(syncSnap)
+	for _, f := range tweaks {
+		f(ex)
+	}
+	done := make(chan []Result, 1)
+	go func() { done <- ex.Run(context.Background(), states, plans) }()
+	return done
+}
+
+func waitResults(t *testing.T, done <-chan []Result) []Result {
+	t.Helper()
+	select {
+	case res := <-done:
+		return res
+	case <-time.After(waitTimeout):
+		t.Fatalf("Run did not return within %v", waitTimeout)
+		return nil
+	}
+}
+
+// waitFor polls cond until it holds.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(waitTimeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %v waiting for %s", waitTimeout, what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// flatDatasets sets up tank/<name> for each name, one snapshot each,
+// replicated recursively without the parent into the existing backup.
+func flatDatasets(t *testing.T, jobs int, names ...string) *execEnv {
+	env := newExecEnv(t, "tank", "backup")
+	env.opts.Recursive, env.opts.SkipParent = true, true
+	env.opts.Jobs = jobs
+	env.sw.Create("tank", "")
+	for _, n := range names {
+		env.sw.Create("tank/"+n, "")
+		env.sw.Snap("tank/"+n, "s1")
+	}
+	env.tw.Create("backup", "")
+	return env
+}
+
+func TestExecutorJobsLimit(t *testing.T) {
+	env := flatDatasets(t, 3, "a", "b", "c", "d", "e")
+	g := gateSends(t, env)
+	done := env.startExec(syncName(10))
+	var first []string
+	for range 3 {
+		first = append(first, g.waitStarted())
+	}
+	g.noneStarted(100 * time.Millisecond)
+	for _, ds := range first {
+		g.open(ds)
+	}
+	for range 2 {
+		g.open(g.waitStarted())
+	}
+	res := waitResults(t, done)
+	wantStatuses(t, res, StatusOK, StatusOK, StatusOK, StatusOK, StatusOK)
+	if m := g.maxRunning(); m != 3 {
+		t.Errorf("max running = %d, want 3", m)
+	}
+}
+
+func TestExecutorJobsMoreThanDatasets(t *testing.T) {
+	env := flatDatasets(t, 10, "a", "b")
+	g := gateSends(t, env)
+	done := env.startExec(syncName(10))
+	a, b := g.waitStarted(), g.waitStarted()
+	g.open(a)
+	g.open(b)
+	wantStatuses(t, waitResults(t, done), StatusOK, StatusOK)
+	if m := g.maxRunning(); m != 2 {
+		t.Errorf("max running = %d, want 2", m)
+	}
+}
+
+func TestExecutorJobsParentFirst(t *testing.T) {
+	env := newExecEnv(t, "tank/data", "backup/data")
+	env.opts.Recursive, env.opts.Jobs = true, 2
+	env.sw.Create("tank", "")
+	for _, ds := range []string{"tank/data", "tank/data/a"} {
+		env.sw.Create(ds, "")
+		env.sw.Snap(ds, "s1")
+	}
+	env.tw.Create("backup", "")
+	g := gateSends(t, env)
+	childSaw := "not sent"
+	g.onEnter = func(ds string, _ map[string]bool) {
+		if ds == "tank/data/a" {
+			childSaw = "no parent target"
+			if env.tw.Dataset("backup/data") != nil {
+				childSaw = "parent target"
+			}
+		}
+	}
+	done := env.startExec(syncName(10))
+	if ds := g.waitStarted(); ds != "tank/data" {
+		t.Fatalf("first send %s, want tank/data", ds)
+	}
+	g.noneStarted(100 * time.Millisecond)
+	g.open("tank/data")
+	g.open(g.waitStarted())
+	wantStatuses(t, waitResults(t, done), StatusOK, StatusOK)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if childSaw != "parent target" {
+		t.Errorf("child send saw %s, want parent target", childSaw)
+	}
+}
+
+func TestExecutorJobsForceDeleteSerializesChild(t *testing.T) {
+	env := newExecEnv(t, "tank/data", "backup/data")
+	env.opts.Recursive, env.opts.ForceDelete, env.opts.Jobs = true, true, 2
+	env.sw.Create("tank", "")
+	env.tw.Create("backup", "")
+	for _, ds := range []string{"tank/data", "tank/data/a"} {
+		env.sw.Create(ds, "")
+		env.sw.Snap(ds, "s1")
+		mustTransfer(t, env.src, env.dst, zfs.SendSpec{Dataset: ds, To: "s1"}, "backup"+strings.TrimPrefix(ds, "tank"))
+	}
+	g := gateSends(t, env)
+	overlap := false
+	g.onEnter = func(ds string, running map[string]bool) {
+		if ds == "tank/data/a" && running["tank/data"] {
+			overlap = true
+		}
+	}
+	done := env.startExec(syncName(10))
+	if ds := g.waitStarted(); ds != "tank/data" {
+		t.Fatalf("first send %s, want tank/data", ds)
+	}
+	g.noneStarted(100 * time.Millisecond)
+	g.open("tank/data")
+	g.open(g.waitStarted())
+	wantStatuses(t, waitResults(t, done), StatusOK, StatusOK)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if overlap {
+		t.Error("child sent while its parent was sending")
+	}
+}
+
+func TestExecutorJobsResultOrder(t *testing.T) {
+	env := flatDatasets(t, 3, "a", "b", "c")
+	g := gateSends(t, env)
+	rec := &recordingRenderer{}
+	done := env.startExec(syncName(10), func(ex *Executor) { ex.Progress = rec })
+	for range 3 {
+		g.waitStarted()
+	}
+	for _, n := range []string{"c", "b", "a"} {
+		g.open("tank/" + n)
+		// full s1, then incremental to the sync snapshot
+		waitFor(t, "tank/"+n+"'s transfers to finish", func() bool {
+			return countPrefix(rec.got(), "finish tank/"+n+" <nil>") == 2
+		})
+	}
+	res := waitResults(t, done)
+	wantStatuses(t, res, StatusOK, StatusOK, StatusOK)
+	for i, n := range []string{"a", "b", "c"} {
+		if res[i].Source != "tank/"+n {
+			t.Errorf("result %d is %s, want tank/%s", i, res[i].Source, n)
+		}
+		if res[i].Bytes <= 0 {
+			t.Errorf("result %d (%s): Bytes = %d, want > 0", i, res[i].Source, res[i].Bytes)
+		}
 	}
 }

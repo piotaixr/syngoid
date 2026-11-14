@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/piotaixr/syngoid/internal/cli"
@@ -43,18 +44,33 @@ type Executor struct {
 	// SyncSnap is this run's sync snapshot name ("" with --no-sync-snap).
 	SyncSnap string
 
-	// warnedUnpriv records the sources already warned about properties
-	// dropped for an unprivileged Linux target.
+	// mu guards warnedUnpriv, which records the sources already warned
+	// about properties dropped for an unprivileged Linux target.
+	mu           sync.Mutex
 	warnedUnpriv map[string]bool
+	// confirmMu serializes Confirm calls: one question at a time.
+	confirmMu sync.Mutex
+}
+
+// confirm asks Confirm, when set, whether to run a destructive step; only
+// one question is asked at a time.
+func (e *Executor) confirm(question string) bool {
+	if e.Confirm == nil {
+		return true
+	}
+	e.confirmMu.Lock()
+	defer e.confirmMu.Unlock()
+	return e.Confirm(question)
 }
 
 // Run executes plans, where plans[i] is the plan of states[i], and returns
 // one Result per state in the same order. It first excludes busy targets,
 // creates the sync snapshots in one batch per pool, refreshes and re-plans
-// every dataset, then runs the datasets sequentially in dependency order.
+// every dataset, then runs up to Opts.Jobs datasets at once (at least one)
+// in dependency order, starting the lowest-index ready dataset first.
 // A dataset whose dependency ended other than ok or nothing to do is
-// skipped as a soft failure. After ctx
-// is cancelled no new action starts and every unfinished dataset ends
+// skipped as a soft failure. After ctx is cancelled no new dataset starts,
+// the running ones are waited for, and every unfinished dataset ends
 // critical with message "cancelled". Every outcome is logged: critical
 // failures as CRITICAL ERROR, soft failures as WARNING, skipped datasets
 // and nothing to do as INFO; plan-time outcomes are logged when their
@@ -75,6 +91,8 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 		logLater: make([]bool, len(states)),
 		stale:    make([]bool, len(states)),
 		visited:  make([]bool, len(states)),
+		finished: make([]bool, len(states)),
+		failed:   make([]bool, len(states)),
 	}
 	for i, s := range r.states {
 		r.results[i] = Result{Source: s.Source, Target: s.Target}
@@ -90,28 +108,21 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 		phase(ctx)
 	}
 
-	order, deps := Order(r.states, r.e.Opts.ForceDelete)
-	failed := make([]bool, len(r.states))
-	for _, i := range order {
-		r.visited[i] = true
-		switch {
-		case r.logLater[i]:
-			r.logLater[i] = false
-			r.e.logOutcome(r.results[i].Status, r.results[i].Message)
-		case !r.done[i]:
-			r.runOne(ctx, i, deps[i], failed)
-		}
-		st := r.results[i].Status
-		failed[i] = st != StatusOK && st != StatusNothing
-	}
+	_, deps := Order(r.states, r.e.Opts.ForceDelete)
+	r.dispatch(ctx, deps)
 	return r.results
 }
 
-// runState is the bookkeeping of one Run.
+// runState is the bookkeeping of one Run. Once the pre-phases are over,
+// every access to results, done, logLater, stale, visited, finished and
+// failed holds mu; states[i] and plans[i] are only touched by dataset i's
+// goroutine once it is dispatched.
 type runState struct {
-	e       *Executor
-	states  []DatasetState
-	plans   []Plan
+	e      *Executor
+	states []DatasetState
+	plans  []Plan
+
+	mu      sync.Mutex
 	results []Result
 	done    []bool
 	// logLater marks final outcomes decided by a plan, logged when the
@@ -120,32 +131,164 @@ type runState struct {
 	// stale marks datasets whose target was destroyed by an ancestor's
 	// --force-delete: they are re-gathered and re-planned before running.
 	stale []bool
-	// visited marks the datasets the execution loop has reached.
+	// visited marks the datasets the dispatcher has reached.
 	visited []bool
+	// finished marks the datasets with a final result and no goroutine.
+	finished []bool
+	// failed marks the finished datasets that ended other than ok or
+	// nothing to do; their dependents are skipped.
+	failed []bool
 }
 
-// runOne executes dataset i unless ctx is cancelled or a dependency failed.
-func (r *runState) runOne(ctx context.Context, i int, deps []int, failed []bool) {
+// dispatch runs up to Opts.Jobs datasets at once, each in its own
+// goroutine, taking the lowest-index dataset whose deps are all finished.
+// Once ctx is cancelled it starts nothing more, waits for the running
+// datasets and ends every unreached one as cancelled.
+func (r *runState) dispatch(ctx context.Context, deps [][]int) {
+	jobs := max(1, r.e.Opts.Jobs)
+	doneCh := make(chan int)
+	cancelled := ctx.Done()
+	running := 0
+	for {
+		for running < jobs && ctx.Err() == nil {
+			i, start := r.next(deps, running == 0)
+			if i < 0 {
+				break
+			}
+			if start {
+				running++
+				go func() {
+					r.runOne(ctx, i)
+					doneCh <- i
+				}()
+			}
+		}
+		if running == 0 {
+			break
+		}
+		select {
+		case i := <-doneCh:
+			running--
+			r.mu.Lock()
+			r.settle(i)
+			r.mu.Unlock()
+		case <-cancelled:
+			cancelled = nil // stop starting; keep collecting
+		}
+	}
+	r.cancelRest(ctx)
+}
+
+// next marks the next dataset to dispatch as visited and returns its index,
+// or -1 when none is ready. A dataset is ready when all its deps are
+// finished; when idle (nothing running) and none is ready, the lowest
+// unvisited one is taken, as Order does on a cycle. start reports that the
+// dataset must run; otherwise its outcome was settled here (plan-time
+// outcome logged, earlier final result, or skipped for a failed
+// dependency).
+func (r *runState) next(deps [][]int, idle bool) (i int, start bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	i = -1
+	for j, v := range r.visited {
+		if !v && r.ready(deps[j]) {
+			i = j
+			break
+		}
+	}
+	if i < 0 && idle {
+		for j, v := range r.visited {
+			if !v {
+				i = j
+				break
+			}
+		}
+	}
+	if i < 0 {
+		return -1, false
+	}
+	r.visited[i] = true
+	switch {
+	case r.logLater[i]:
+		r.logLater[i] = false
+		r.e.logOutcome(r.results[i].Status, r.results[i].Message)
+	case r.done[i]:
+	default:
+		for _, d := range deps[i] {
+			if r.failed[d] {
+				r.finishLocked(i, StatusSoft, "skipped: dependency "+r.states[d].Source+" failed", nil)
+				r.settle(i)
+				return i, false
+			}
+		}
+		return i, true
+	}
+	r.settle(i)
+	return i, false
+}
+
+// ready reports whether every dataset in deps is finished. r.mu is held.
+func (r *runState) ready(deps []int) bool {
+	for _, d := range deps {
+		if !r.finished[d] {
+			return false
+		}
+	}
+	return true
+}
+
+// settle marks dataset i finished and records whether it failed. r.mu is
+// held.
+func (r *runState) settle(i int) {
+	st := r.results[i].Status
+	r.finished[i] = true
+	r.failed[i] = st != StatusOK && st != StatusNothing
+}
+
+// cancelRest ends the datasets the dispatcher did not reach because ctx
+// was cancelled, in index order: plan-time outcomes are logged, the others
+// end cancelled.
+func (r *runState) cancelRest(ctx context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, v := range r.visited {
+		if v {
+			continue
+		}
+		r.visited[i] = true
+		switch {
+		case r.logLater[i]:
+			r.logLater[i] = false
+			r.e.logOutcome(r.results[i].Status, r.results[i].Message)
+		case !r.done[i]:
+			r.finishLocked(i, StatusCritical, msgCancelled, ctx.Err())
+		}
+		r.settle(i)
+	}
+}
+
+// runOne executes dataset i unless ctx is cancelled. It runs in the
+// dataset's own goroutine.
+func (r *runState) runOne(ctx context.Context, i int) {
 	if err := ctx.Err(); err != nil {
 		r.finish(i, StatusCritical, msgCancelled, err)
 		return
 	}
-	for _, d := range deps {
-		if failed[d] {
-			r.finish(i, StatusSoft, "skipped: dependency "+r.states[d].Source+" failed", nil)
-			return
-		}
-	}
-	if r.stale[i] && !r.regather(ctx, i) {
+	r.mu.Lock()
+	stale := r.stale[i]
+	r.mu.Unlock()
+	if stale && !r.regather(ctx, i) {
 		return
 	}
 	d := r.e.runDataset(ctx, r.states[i], r.plans[i])
+	r.mu.Lock()
 	if d.logged {
-		r.record(i, d.res.Status, d.res.Message, d.res.Err)
+		r.recordLocked(i, d.res.Status, d.res.Message, d.res.Err)
 	} else {
-		r.finish(i, d.res.Status, d.res.Message, d.res.Err)
+		r.finishLocked(i, d.res.Status, d.res.Message, d.res.Err)
 	}
 	r.results[i].Bytes, r.results[i].Duration = d.res.Bytes, d.res.Duration
+	r.mu.Unlock()
 	if d.destroyed != "" {
 		r.invalidate(d.destroyed)
 	}
@@ -153,10 +296,17 @@ func (r *runState) runOne(ctx context.Context, i int, deps []int, failed []bool)
 
 // invalidate marks every dataset not yet reached whose target is under the
 // recursively destroyed target as stale. One that had nothing to do is
-// pending again: its target no longer exists.
+// pending again: its target no longer exists. Under --force-delete every
+// child depends on its parent, so none of them has been dispatched yet.
 func (r *runState) invalidate(destroyed string) {
-	for j, s := range r.states {
-		if r.visited[j] || (s.Target != destroyed && !strings.HasPrefix(s.Target, destroyed+"/")) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for j, v := range r.visited {
+		if v {
+			continue
+		}
+		s := r.states[j]
+		if s.Target != destroyed && !strings.HasPrefix(s.Target, destroyed+"/") {
 			continue
 		}
 		if r.done[j] {
@@ -196,6 +346,8 @@ func (r *runState) regather(ctx context.Context, i int) bool {
 
 // pending returns the indices of the datasets without a final result.
 func (r *runState) pending() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var out []int
 	for i, d := range r.done {
 		if !d {
@@ -207,6 +359,13 @@ func (r *runState) pending() []int {
 
 // record sets the final status of dataset i without logging it.
 func (r *runState) record(i int, st Status, msg string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recordLocked(i, st, msg, err)
+}
+
+// recordLocked is record with r.mu held.
+func (r *runState) recordLocked(i int, st Status, msg string, err error) {
 	res := &r.results[i]
 	res.Status, res.Message, res.Err = st, msg, err
 	r.done[i] = true
@@ -214,14 +373,23 @@ func (r *runState) record(i int, st Status, msg string, err error) {
 
 // finish records the final status of dataset i and logs it.
 func (r *runState) finish(i int, st Status, msg string, err error) {
-	r.record(i, st, msg, err)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.finishLocked(i, st, msg, err)
+}
+
+// finishLocked is finish with r.mu held.
+func (r *runState) finishLocked(i int, st Status, msg string, err error) {
+	r.recordLocked(i, st, msg, err)
 	r.e.logOutcome(st, msg)
 }
 
 // planned records the non-ok outcome of plan p for dataset i, to be logged
-// when the execution loop reaches the dataset.
+// when the dispatcher reaches the dataset.
 func (r *runState) planned(i int, p Plan) {
-	r.record(i, p.Status, p.Message, nil)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recordLocked(i, p.Status, p.Message, nil)
 	r.logLater[i] = true
 }
 
@@ -549,7 +717,7 @@ func (d *dsRun) forceDestroy(ctx context.Context) step {
 	if stop, ok := d.checkBusy(ctx); !ok {
 		return stop
 	}
-	if d.e.Confirm != nil && !d.e.Confirm("Destroy "+d.st.Target+" recursively (--force-delete)?") {
+	if !d.e.confirm("Destroy " + d.st.Target + " recursively (--force-delete)?") {
 		return d.end(StatusCritical, msgDeclined, nil)
 	}
 	d.e.Log.Warn("Removing " + d.st.Target + " because no matching snapshots were found")
