@@ -658,3 +658,70 @@ func TestExecutorWarnsDroppedUnprivProps(t *testing.T) {
 		})
 	}
 }
+
+// recordingRenderer records the renderer calls the executor makes.
+type recordingRenderer struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *recordingRenderer) record(ev string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+}
+
+func (r *recordingRenderer) got() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events...)
+}
+
+func (r *recordingRenderer) Start(label string, _ int64) stream.Transfer {
+	r.record("start " + label)
+	return &recordingTransfer{r: r, label: label}
+}
+func (r *recordingRenderer) Aborting() { r.record("aborting") }
+func (r *recordingRenderer) Close()    {}
+
+type recordingTransfer struct {
+	r     *recordingRenderer
+	label string
+}
+
+func (t *recordingTransfer) Update(int64) {}
+func (t *recordingTransfer) Sent()        { t.r.record("sent " + t.label) }
+func (t *recordingTransfer) Finish(_ int64, err error) {
+	t.r.record(fmt.Sprintf("finish %s %v", t.label, err))
+}
+
+func TestExecutorTransferPhases(t *testing.T) {
+	setup := func() (*execEnv, *recordingRenderer, []DatasetState, []Plan) {
+		env := newExecEnv(t, "tank/a", "backup/a")
+		env.opts.NoSyncSnap = true
+		env.sw.Create("tank", "")
+		env.sw.Create("tank/a", "")
+		env.sw.Snap("tank/a", "s1")
+		env.tw.Create("backup", "")
+		mustTransfer(t, env.src, env.dst, zfs.SendSpec{Dataset: "tank/a", To: "s1"}, "backup/a")
+		env.sw.Snap("tank/a", "s2")
+		states, plans := env.plan("")
+		return env, &recordingRenderer{}, states, plans
+	}
+
+	env, rec, states, plans := setup()
+	ex := env.executor("")
+	ex.Progress = rec
+	wantStatuses(t, ex.Run(context.Background(), states, plans), StatusOK)
+	wantCalls(t, "renderer", rec.got(), []string{"start tank/a", "sent tank/a", "finish tank/a <nil>"})
+
+	env, rec, states, plans = setup()
+	env.src.Faults.Send = func(zfs.SendSpec) error { return errors.New("injected") }
+	ex = env.executor("")
+	ex.Progress = rec
+	ex.Run(context.Background(), states, plans)
+	got := rec.got()
+	if len(got) != 2 || got[0] != "start tank/a" || !strings.HasPrefix(got[1], "finish tank/a ") || !strings.Contains(got[1], "injected") {
+		t.Errorf("renderer events on send failure = %q, want start then finish with injected", got)
+	}
+}

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/piotaixr/syngoid/internal/endpoint"
 	"github.com/piotaixr/syngoid/internal/stream"
@@ -53,12 +52,11 @@ func (e *Executor) transfer(ctx context.Context, st DatasetState, a Action) (int
 	}
 
 	var raw atomic.Int64
+	h := e.Progress.Start(st.Source, est)
 	sendOpts := endpoint.SendOpts{Codec: e.SendCodec, Progress: func(n int64) {
 		raw.Store(n)
-		e.Progress.Update(n)
+		h.Update(n)
 	}}
-	e.Progress.Start(st.Source, est)
-	start := time.Now()
 
 	// Send and copy failures reach the receive through the pipes, so ctx2 is
 	// only cancelled when the receive fails: cancelling it earlier could kill
@@ -84,6 +82,7 @@ func (e *Executor) transfer(ctx context.Context, st DatasetState, a Action) (int
 			_ = bW.CloseWithError(fmt.Errorf("%w: %w", errUpstream, copyErr))
 			return
 		}
+		h.Sent()
 		_ = bW.Close()
 	}()
 	recvErr := e.Dst.Receive(ctx2, zfs.RecvSpec{Dataset: st.Target, Args: args}, e.RecvCodec, bR)
@@ -104,7 +103,7 @@ func (e *Executor) transfer(ctx context.Context, st DatasetState, a Action) (int
 		err = &sideErr{Target, recvErr}
 	}
 	n := raw.Load()
-	e.Progress.Finish(n, time.Since(start), err)
+	h.Finish(n, err)
 	return n, err
 }
 

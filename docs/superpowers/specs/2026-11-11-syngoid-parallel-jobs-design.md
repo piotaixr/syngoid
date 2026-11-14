@@ -127,7 +127,7 @@ type Renderer interface {
 type Transfer interface {
 	Update(rawBytes int64)
 	Sent() // the whole stream has been handed to the receiver
-	Finish(rawBytes int64, elapsed time.Duration, err error)
+	Finish(rawBytes int64, err error)
 }
 ```
 
@@ -135,6 +135,9 @@ type Transfer interface {
 copy goroutine has written the whole stream into the receive pipe (`stream.Copy` returned nil), and `Finish` once the
 receive has returned. The stream phase is `Start → Sent`; the receive tail is `Sent → Finish`. When `Sent` never
 happens (failure), the tail is not reported.
+
+Deviation from the first draft of this interface: `Finish` takes no elapsed time; the renderer times both phases with
+its own clock (`Start`, `Sent`, `Finish`).
 
 ### 6.2 Bar mode
 
@@ -161,7 +164,7 @@ The end line names the dataset, since lines from parallel jobs interleave, and r
 second:
 
 ```
-INFO: pool/srv/app: transferred 556.9 KiB in 0:00:02 (278.4 KiB/s); zfs receive finished 0:00:15 later
+INFO: pool/srv/app: transferred 556.9 KiB in 0:00:02 (278.5 KiB/s); zfs receive finished 0:00:15 later
 ```
 
 `none` and `--quiet` are unchanged.

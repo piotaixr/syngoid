@@ -60,9 +60,9 @@ func TestBarRender(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(1000, 0)}
 	r := newTestBar(&buf, clk)
 
-	r.Start("tank/a", 2*gib)
+	h := r.Start("tank/a", 2*gib)
 	clk.advance(10 * time.Second)
-	r.Update(gib)
+	h.Update(gib)
 
 	seg := lastSegment(buf.String())
 	for _, want := range []string{"\r", "tank/a", " 50%", "1.0 GiB/2.0 GiB", "102.4 MiB/s", "ETA 0:00:10", "\x1b[K"} {
@@ -74,7 +74,8 @@ func TestBarRender(t *testing.T) {
 		t.Errorf("segment %q does not start with CR", seg)
 	}
 
-	r.Finish(2*gib, 20*time.Second, nil)
+	clk.advance(10 * time.Second)
+	h.Finish(2*gib, nil)
 	out := buf.String()
 	if !strings.HasSuffix(out, "\n") {
 		t.Errorf("output does not end with newline: %q", out)
@@ -89,9 +90,9 @@ func TestBarRenderUnknownEstimate(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(1000, 0)}
 	r := newTestBar(&buf, clk)
 
-	r.Start("tank/a", 0)
+	h := r.Start("tank/a", 0)
 	clk.advance(10 * time.Second)
-	r.Update(gib)
+	h.Update(gib)
 
 	seg := lastSegment(buf.String())
 	if strings.Contains(seg, "%") || strings.Contains(seg, "ETA") {
@@ -107,28 +108,27 @@ func TestBarRenderThrottle(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(1000, 0)}
 	r := newTestBar(&buf, clk)
 
-	r.Start("x", gib)
+	h := r.Start("x", gib)
 	clk.advance(time.Second)
-	r.Update(1)
-	r.Update(2)
+	h.Update(1)
+	h.Update(2)
 	clk.advance(100 * time.Millisecond)
-	r.Update(3)
+	h.Update(3)
 	if n := strings.Count(buf.String(), "\r"); n != 1 {
 		t.Fatalf("writes before 200ms elapsed = %d, want 1", n)
 	}
 	clk.advance(100 * time.Millisecond)
-	r.Update(4)
+	h.Update(4)
 	if n := strings.Count(buf.String(), "\r"); n != 2 {
 		t.Fatalf("writes after 200ms = %d, want 2", n)
 	}
-	r.Finish(4, time.Second, nil)
+	h.Finish(4, nil)
 	if n := strings.Count(buf.String(), "\r"); n != 3 {
 		t.Fatalf("Finish must write regardless of throttle, writes = %d", n)
 	}
 }
 
-func TestPlainRender(t *testing.T) {
-	var out bytes.Buffer
+func newTestPlain(c *fakeClock) (*plainRenderer, *bytes.Buffer) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 		if a.Key == slog.TimeKey {
@@ -136,18 +136,64 @@ func TestPlainRender(t *testing.T) {
 		}
 		return a
 	}}))
-	r := NewRenderer(ProgressPlain, &out, false, log)
+	r := NewRenderer(ProgressPlain, nil, false, log).(*plainRenderer)
+	r.now = c.now
+	return r, &logs
+}
 
-	r.Start("tank/a", 2*gib)
-	r.Update(gib)
-	if out.Len() != 0 || logs.Len() != 0 {
-		t.Fatalf("Start/Update wrote output=%q logs=%q", out.String(), logs.String())
+func TestPlainRender(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	r, logs := newTestPlain(clk)
+
+	h := r.Start("tank/a", 2*gib)
+	h.Update(gib)
+	if logs.Len() != 0 {
+		t.Fatalf("Start/Update logged %q", logs.String())
 	}
-	r.Finish(2*gib, 20*time.Second, nil)
-	if out.Len() != 0 {
-		t.Errorf("plain wrote to w: %q", out.String())
+	clk.advance(20 * time.Second)
+	h.Finish(2*gib, nil)
+	if want := `level=INFO msg="tank/a: transferred 2.0 GiB in 0:00:20 (102.4 MiB/s)"`; strings.TrimSpace(logs.String()) != want {
+		t.Errorf("log = %q, want %q", logs.String(), want)
 	}
-	if want := `level=INFO msg="transferred 2.0 GiB in 0:00:20 (102.4 MiB/s)"`; strings.TrimSpace(logs.String()) != want {
+}
+
+func TestPlainRenderTail(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	r, logs := newTestPlain(clk)
+
+	h := r.Start("tank/a", 0)
+	clk.advance(2 * time.Second)
+	h.Update(570266)
+	h.Sent()
+	clk.advance(15 * time.Second)
+	h.Finish(570266, nil)
+	if want := `level=INFO msg="tank/a: transferred 556.9 KiB in 0:00:02 (278.5 KiB/s); zfs receive finished 0:00:15 later"`; strings.TrimSpace(logs.String()) != want {
+		t.Errorf("log = %q, want %q", logs.String(), want)
+	}
+}
+
+func TestPlainRenderShortTail(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	r, logs := newTestPlain(clk)
+
+	h := r.Start("tank/a", 0)
+	clk.advance(2 * time.Second)
+	h.Sent()
+	clk.advance(500 * time.Millisecond)
+	h.Finish(570266, nil)
+	if want := `level=INFO msg="tank/a: transferred 556.9 KiB in 0:00:02 (278.5 KiB/s)"`; strings.TrimSpace(logs.String()) != want {
+		t.Errorf("log = %q, want %q", logs.String(), want)
+	}
+}
+
+func TestPlainRenderNoSent(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	r, logs := newTestPlain(clk)
+
+	h := r.Start("tank/a", 0)
+	clk.advance(17 * time.Second)
+	h.Finish(17*1024, nil)
+	if want := `level=INFO msg="tank/a: transferred 17.0 KiB in 0:00:17 (1.0 KiB/s)"`; strings.TrimSpace(logs.String()) != want {
 		t.Errorf("log = %q, want %q", logs.String(), want)
 	}
 }
@@ -155,9 +201,26 @@ func TestPlainRender(t *testing.T) {
 func TestPlainRenderErrorLogsNothing(t *testing.T) {
 	var logs bytes.Buffer
 	r := NewRenderer(ProgressPlain, nil, false, slog.New(slog.NewTextHandler(&logs, nil)))
-	r.Finish(gib, time.Second, errTest)
+	r.Start("tank/a", 0).Finish(gib, errTest)
 	if logs.Len() != 0 {
 		t.Errorf("logged on error: %q", logs.String())
+	}
+}
+
+func TestBarRenderTail(t *testing.T) {
+	var buf bytes.Buffer
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	r := newTestBar(&buf, clk)
+
+	h := r.Start("tank/a", 36864)
+	clk.advance(time.Second)
+	h.Update(37786)
+	h.Sent()
+	clk.advance(15 * time.Second)
+	h.Finish(37786, nil)
+	want := "\rtank/a  100%  36.9 KiB/36.0 KiB  36.9 KiB/s  ETA 0:00:00  zfs receive +0:00:15\x1b[K\n"
+	if got := lastSegment(buf.String()); got != want {
+		t.Errorf("final line = %q, want %q", got, want)
 	}
 }
 
@@ -166,9 +229,12 @@ var errTest = bytes.ErrTooLarge
 func TestNoneRender(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRenderer(ProgressNone, &out, true, nil)
-	r.Start("x", gib)
-	r.Update(gib)
-	r.Finish(gib, time.Second, nil)
+	h := r.Start("x", gib)
+	h.Update(gib)
+	h.Sent()
+	h.Finish(gib, nil)
+	r.Aborting()
+	r.Close()
 	if out.Len() != 0 {
 		t.Errorf("none wrote %q", out.String())
 	}
@@ -189,14 +255,14 @@ func TestBarETAClamped(t *testing.T) {
 	var buf bytes.Buffer
 	clk := &fakeClock{t: time.Unix(1000, 0)}
 	r := newTestBar(&buf, clk)
-	r.Start("x", 1<<62)
+	h := r.Start("x", 1<<62)
 	clk.advance(time.Hour)
-	r.Update(1) // tiny rate, enormous remainder
+	h.Update(1) // tiny rate, enormous remainder
 	if seg := lastSegment(buf.String()); !strings.Contains(seg, "ETA 99999:59:59") {
 		t.Errorf("segment %q: ETA not clamped", seg)
 	}
 	buf.Reset()
-	r.Finish(1<<62+5, time.Second, nil) // done beyond estimate
+	h.Finish(1<<62+5, nil) // done beyond estimate
 	if seg := lastSegment(buf.String()); !strings.Contains(seg, "ETA 0:00:00") {
 		t.Errorf("segment %q: ETA should be 0", seg)
 	}
