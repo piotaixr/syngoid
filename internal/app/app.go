@@ -28,9 +28,9 @@ type Env struct {
 	Stderr      io.Writer
 	StdinIsTTY  bool
 	StderrIsTTY bool
-	// TermWidth reports the width of the stderr terminal in columns. It may
-	// be nil, meaning 80.
-	TermWidth func() int
+	// TermSize reports the width and height of the stderr terminal; a height
+	// of 0 means unknown. It may be nil, meaning 80 columns and unknown height.
+	TermSize func() (width, height int)
 	// Interrupts lets the user drain a run. It may be nil, meaning never.
 	Interrupts engine.Interrupts
 	Hostname   func() (string, error)
@@ -125,13 +125,13 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	stdout, stderr := env.Stdout, env.Stderr
 	var term *stream.Terminal
 	if mode == stream.ProgressBar {
-		width := env.TermWidth
-		if width == nil {
-			width = func() int { return 80 }
+		size := env.TermSize
+		if size == nil {
+			size = func() (int, int) { return 80, 0 }
 		}
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
-		term = stream.NewTerminal(env.Stderr, width, ticker.C)
+		term = stream.NewTerminal(env.Stderr, size, ticker.C)
 		defer term.Close()
 		stdout, stderr = term.Writer(env.Stdout), term.Writer(env.Stderr)
 	}

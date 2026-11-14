@@ -27,7 +27,7 @@ import (
 
 func main() {
 	ctl, ctx := sigctl.New(context.Background(), os.Exit)
-	go ctl.Listen()
+	ctl.Start()
 	defer ctl.Stop()
 
 	var logger *slog.Logger
@@ -38,7 +38,7 @@ func main() {
 		Stderr:      os.Stderr,
 		StdinIsTTY:  stdinIsTTY,
 		StderrIsTTY: isTTY(os.Stderr),
-		TermWidth:   stderrWidth,
+		TermSize:    stderrSize,
 		Interrupts:  ctl,
 		Hostname:    os.Hostname,
 		Now:         time.Now,
@@ -126,12 +126,17 @@ func (p *pools) exists(name string) bool {
 	return false
 }
 
-// stderrWidth returns the width of the stderr terminal, 80 when unknown.
-func stderrWidth() int {
-	if w, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && w > 0 {
-		return w
+// stderrSize returns the width and height of the stderr terminal: width 80
+// and height 0 when unknown.
+func stderrSize() (width, height int) {
+	w, h, err := term.GetSize(int(os.Stderr.Fd()))
+	if err != nil {
+		return 80, 0
 	}
-	return 80
+	if w <= 0 {
+		w = 80
+	}
+	return w, max(h, 0)
 }
 
 // isTTY reports whether f is a terminal; /dev/null and pipes are not.

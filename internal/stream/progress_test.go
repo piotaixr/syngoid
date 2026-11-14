@@ -126,7 +126,7 @@ func TestPlainRenderErrorLogsNothing(t *testing.T) {
 
 func TestNoneRender(t *testing.T) {
 	var out bytes.Buffer
-	term := NewTerminal(&out, func() int { return 80 }, nil)
+	term := NewTerminal(&out, func() (int, int) { return 80, 0 }, nil)
 	r := NewRenderer(ProgressNone, term, nil, time.Now)
 	h := r.Start("x", gib)
 	h.Update(gib)

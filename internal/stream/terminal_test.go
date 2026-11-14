@@ -3,6 +3,7 @@ package stream
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +19,7 @@ func fixedRegion(rows ...string) func(int) []string {
 
 func newTestTerminal(width int) (*Terminal, *bytes.Buffer) {
 	var w bytes.Buffer
-	return NewTerminal(&w, func() int { return width }, nil), &w
+	return NewTerminal(&w, func() (int, int) { return width, 0 }, nil), &w
 }
 
 func TestTerminalRegionRedraw(t *testing.T) {
@@ -134,7 +135,7 @@ func TestTerminalPrint(t *testing.T) {
 
 func TestTerminalConcurrentWriters(t *testing.T) {
 	var w bytes.Buffer
-	term := NewTerminal(&w, func() int { return 80 }, nil)
+	term := NewTerminal(&w, func() (int, int) { return 80, 0 }, nil)
 	term.SetRegion(fixedRegion("row"))
 	var outA, outB bytes.Buffer
 	wa, wb := term.Writer(&outA), term.Writer(&outB)
@@ -172,7 +173,7 @@ func TestTerminalConcurrentWriters(t *testing.T) {
 func TestTerminalClose(t *testing.T) {
 	var w bytes.Buffer
 	tick := make(chan time.Time, 1)
-	term := NewTerminal(&w, func() int { return 80 }, tick)
+	term := NewTerminal(&w, func() (int, int) { return 80, 0 }, tick)
 	term.SetRegion(fixedRegion("row"))
 	term.Redraw()
 	w.Reset()
@@ -192,7 +193,7 @@ func TestTerminalClose(t *testing.T) {
 func TestTerminalTickRedraws(t *testing.T) {
 	var w syncBuffer
 	tick := make(chan time.Time)
-	term := NewTerminal(&w, func() int { return 80 }, tick)
+	term := NewTerminal(&w, func() (int, int) { return 80, 0 }, tick)
 	defer term.Close()
 	term.SetRegion(fixedRegion("row"))
 	w.Reset()
@@ -226,4 +227,127 @@ func (s *syncBuffer) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.b.Reset()
+}
+
+func TestTerminalSuspendHoldsLines(t *testing.T) {
+	term, w := newTestTerminal(80)
+	term.SetRegion(fixedRegion("row"))
+	term.Redraw()
+	var out bytes.Buffer
+	wr := term.Writer(&out)
+	resume := term.Suspend()
+	w.Reset()
+
+	_, _ = wr.Write([]byte("INFO: a\n"))
+	term.Print("done")
+	_, _ = wr.Write([]byte("INFO: b\nINFO: par"))
+	if w.Len() != 0 || out.Len() != 0 {
+		t.Fatalf("output while suspended: terminal %q, out %q", w.String(), out.String())
+	}
+
+	w.Reset()
+	resume()
+	if got, want := out.String(), "INFO: a\nINFO: b\n"; got != want {
+		t.Errorf("out = %q, want %q", got, want)
+	}
+	if got, want := w.String(), "done\nrow\n"; got != want {
+		t.Errorf("terminal = %q, want %q", got, want)
+	}
+	_, _ = wr.Write([]byte("tial\n"))
+	if got, want := out.String(), "INFO: a\nINFO: b\nINFO: partial\n"; got != want {
+		t.Errorf("out after resume = %q, want %q", got, want)
+	}
+}
+
+func TestTerminalSuspendFlushesInOrder(t *testing.T) {
+	var log orderLog
+	term := NewTerminal(log.dst("term"), func() (int, int) { return 80, 0 }, nil)
+	a, b := term.Writer(log.dst("a")), term.Writer(log.dst("b"))
+	resume := term.Suspend()
+	_, _ = a.Write([]byte("1\n"))
+	term.Print("2")
+	_, _ = b.Write([]byte("3\n"))
+	_, _ = a.Write([]byte("4\n"))
+	if len(log.entries) != 0 {
+		t.Fatalf("output while suspended: %q", log.entries)
+	}
+	resume()
+	want := []string{"a:1\n", "term:2\n", "b:3\n", "a:4\n"}
+	if fmt.Sprint(log.entries) != fmt.Sprint(want) {
+		t.Errorf("flush = %q, want %q", log.entries, want)
+	}
+}
+
+func TestTerminalCloseWhileSuspendedFlushes(t *testing.T) {
+	term, w := newTestTerminal(80)
+	var out bytes.Buffer
+	wr := term.Writer(&out)
+	resume := term.Suspend()
+	_, _ = wr.Write([]byte("INFO: a\n"))
+	term.Print("done")
+	term.Close()
+	if got, want := out.String(), "INFO: a\n"; got != want {
+		t.Errorf("out = %q, want %q", got, want)
+	}
+	if got, want := w.String(), "done\n"; got != want {
+		t.Errorf("terminal = %q, want %q", got, want)
+	}
+	resume()
+	if got, want := w.String(), "done\n"; got != want {
+		t.Errorf("terminal after resume = %q, want %q", got, want)
+	}
+}
+
+func TestTerminalCapsRegionAtHeight(t *testing.T) {
+	var w bytes.Buffer
+	term := NewTerminal(&w, func() (int, int) { return 20, 4 }, nil)
+	term.SetRegion(fixedRegion("r1", "r2", "r3", "r4", "r5"))
+	w.Reset()
+	term.Redraw()
+	if got, want := w.String(), "r1\nr2\n… and 3 more\n"; got != want {
+		t.Fatalf("draw = %q, want %q", got, want)
+	}
+	w.Reset()
+	term.Redraw()
+	if got, want := w.String(), erase(3)+"r1\nr2\n… and 3 more\n"; got != want {
+		t.Errorf("redraw = %q, want %q", got, want)
+	}
+
+	// The overflow row is truncated like any other.
+	w.Reset()
+	term2 := NewTerminal(&w, func() (int, int) { return 6, 4 }, nil)
+	term2.SetRegion(fixedRegion("r1", "r2", "r3", "r4", "r5"))
+	w.Reset()
+	term2.Redraw()
+	if got, want := w.String(), "r1\nr2\n… and\n"; got != want {
+		t.Errorf("narrow draw = %q, want %q", got, want)
+	}
+}
+
+func TestTerminalNoCapWhenHeightUnknownOrEnough(t *testing.T) {
+	for _, h := range []int{0, -1, 6} {
+		var w bytes.Buffer
+		term := NewTerminal(&w, func() (int, int) { return 80, h }, nil)
+		term.SetRegion(fixedRegion("r1", "r2", "r3", "r4", "r5"))
+		w.Reset()
+		term.Redraw()
+		if got, want := w.String(), "r1\nr2\nr3\nr4\nr5\n"; got != want {
+			t.Errorf("height %d: draw = %q, want %q", h, got, want)
+		}
+	}
+}
+
+// orderLog records writes to several destinations in one sequence.
+type orderLog struct{ entries []string }
+
+type orderDst struct {
+	log  *orderLog
+	name string
+}
+
+func (l *orderLog) dst(name string) io.Writer { return orderDst{l, name} }
+
+func (d orderDst) Write(p []byte) (int, error) {
+	d.log.entries = append(d.log.entries, d.name+":"+string(p))
+	return len(p), nil
 }

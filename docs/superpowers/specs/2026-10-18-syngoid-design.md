@@ -558,12 +558,14 @@ Compress next to `zfs send`, decompress next to `zfs receive`, only when a netwo
 
 Size estimate from `SendEstimate` (`zfs send -nvP`, minimum 4096 bytes when known, `0` = unknown). The sending side
 counts **uncompressed** bytes and reports them (remote: `Event{kind:"progress"}` every 500 ms) so progress is
-comparable to the estimate. `bar`: a live region at the bottom of stderr with one row per running transfer (percent, bytes, rate, ETA; a
-"waiting for zfs receive" row once the stream is sent; "aborting…" rows when running transfers are being aborted),
-redrawn every 200 ms; console log lines print above it. On `Finish` the row leaves the region and a permanent line
-is printed above it: the final line's rate covers the
-stream phase only (start until the whole stream was handed to `zfs receive`) and ends with `  zfs receive +H:MM:SS`
-when the receive took at least 1 s longer. `plain`: one line at the end of each transfer,
+comparable to the estimate. `bar`: a live region at the bottom of stderr with one row per running transfer
+(percent, bytes, rate, ETA; a "waiting for zfs receive" row once the stream is sent; "aborting…" rows when running
+transfers are being aborted), redrawn every 200 ms. Rows are cut to the terminal width; when they do not fit in the
+terminal height, the region shows as many as fit and a final "… and K more" row. Console log lines print above the
+region; while a `--confirm` question is on screen they are held and printed once it is answered. When a transfer
+finishes, its row leaves the region and a permanent final line is printed above it. That line's rate covers the
+stream phase only (start until the whole stream was handed to `zfs receive`), and the line ends with
+`  zfs receive +H:MM:SS` when the receive took at least 1 s longer. `plain`: one line at the end of each transfer,
 `<dataset>: transferred <bytes> in <H:MM:SS> (<rate>/s)`, plus `; zfs receive finished <H:MM:SS> later` when that tail
 is at least 1 s (size, stream duration, rate). `none`: nothing. `--quiet` implies `none`.
 
@@ -702,8 +704,8 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   resume.
 - **Parallel sync (`TestITJobs`):** a tree of seven datasets (root, `a`, `a/x`, `b`, `c`, `c/y`, `d`), each with
   snapshots `s1` and `s2`, replicated with `--recursive --jobs 3` and with `--jobs 1` into separate targets; every
-  dataset has the same user snapshots (`s1`, `s2`) on both and at least one sync snapshot. A further `--jobs 3` run after a new
-  snapshot `s3` everywhere brings `s3` to every target.
+  dataset has the same user snapshots (`s1`, `s2`) on both and at least one sync snapshot. A further `--jobs 3` run
+  after a new snapshot `s3` everywhere brings `s3` to every target.
 - **FreeBSD and OmniOS, nightly:** VM-based jobs (vmactions) running the same suite.
 - **Cross-compile** all targets on every PR.
 

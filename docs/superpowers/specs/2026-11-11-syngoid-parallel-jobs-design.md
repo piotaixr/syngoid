@@ -96,6 +96,8 @@ owns the run context and a drain channel, and counts signals:
 *Abort* cancels the run context, i.e. today's first-signal behaviour. The executor *arms* draining when dispatch
 starts and disarms it when `Run` returns, so a Ctrl-C during gather, preflight or planning aborts as today.
 `app.Env` gains the drain channel and the arm/disarm hooks; tests drive the controller through a signal channel.
+`Start` registers for the signals before it returns, as `signal.NotifyContext` did, so no signal arriving during
+startup takes its default action; handling then runs in a goroutine until `Stop`.
 
 ### 5.2 Drain
 
@@ -146,6 +148,9 @@ its own clock (`Start`, `Sent`, `Finish`).
 - A live region at the bottom of stderr, one row per running transfer, in start order. A 200 ms ticker redraws it,
   so spinners and timers move while no bytes arrive. Rows are truncated to the terminal width
   (`golang.org/x/term.GetSize` on stderr, 80 columns when unknown).
+- Height cap: when the terminal height is known and the region has more rows than height − 1, it shows the first
+  height − 2 rows and a final `… and K more` row (K = hidden rows), so no row scrolls off the screen where it could
+  not be erased.
 - Row states:
 
   ```
@@ -177,6 +182,8 @@ In bar mode the console log handler's stdout and stderr writers are wrapped by t
 line erases the region, is written to its stream, and the region is redrawn; partial lines are buffered until their
 newline. The terminal is created in `app` before the logger, so every log line, including remote agent events, goes
 through it. The `--confirm` prompter writes through the same terminal and suspends redrawing until it has its answer.
+While the question is on screen, log lines and final lines from other datasets are held, in order, and are written
+to their streams once the answer is in, before the region is redrawn.
 
 ## 7. Testing (main spec §12)
 

@@ -22,11 +22,11 @@ type Controller struct {
 	cancelled bool
 	exited    bool
 
-	// listening is closed once Listen has registered its signal channel.
-	listening chan struct{}
-	stop      chan struct{}
-	stopOnce  sync.Once
-	sigs      chan os.Signal
+	life    sync.Mutex // guards started and stopped
+	started bool
+	stopped bool
+	stop    chan struct{}
+	sigs    chan os.Signal
 }
 
 // New returns a controller and the run context it cancels on abort. exit is
@@ -34,12 +34,11 @@ type Controller struct {
 func New(parent context.Context, exit func(code int)) (*Controller, context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	return &Controller{
-		exit:      exit,
-		cancel:    cancel,
-		drain:     make(chan struct{}),
-		listening: make(chan struct{}),
-		stop:      make(chan struct{}),
-		sigs:      make(chan os.Signal, 4),
+		exit:   exit,
+		cancel: cancel,
+		drain:  make(chan struct{}),
+		stop:   make(chan struct{}),
+		sigs:   make(chan os.Signal, 4),
 	}, ctx
 }
 
@@ -76,12 +75,24 @@ func (c *Controller) abort() {
 	c.cancel()
 }
 
-// Listen handles SIGINT, SIGTERM and SIGHUP until Stop. It keeps running
-// after an abort so that a further Ctrl-C can force the exit.
-func (c *Controller) Listen() {
+// Start registers for SIGINT, SIGTERM and SIGHUP before it returns, so that
+// no signal takes its default action once Start has been called, and handles
+// them in a goroutine until Stop. Handling continues after an abort so that a
+// further Ctrl-C can force the exit. Start after Stop, or a second Start, does
+// nothing.
+func (c *Controller) Start() {
+	c.life.Lock()
+	defer c.life.Unlock()
+	if c.started || c.stopped {
+		return
+	}
+	c.started = true
 	signal.Notify(c.sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(c.sigs)
-	close(c.listening)
+	go c.loop()
+}
+
+// loop applies received signals until Stop.
+func (c *Controller) loop() {
 	for {
 		select {
 		case s := <-c.sigs:
@@ -92,13 +103,17 @@ func (c *Controller) Listen() {
 	}
 }
 
-// Stop unregisters the signal handler and ends Listen. It is safe to call
-// without Listen and more than once.
+// Stop unregisters the signal handler and ends the Start goroutine. It is
+// safe to call before Start and more than once.
 func (c *Controller) Stop() {
-	c.stopOnce.Do(func() {
-		signal.Stop(c.sigs)
-		close(c.stop)
-	})
+	c.life.Lock()
+	defer c.life.Unlock()
+	if c.stopped {
+		return
+	}
+	c.stopped = true
+	signal.Stop(c.sigs)
+	close(c.stop)
 }
 
 // Arm makes draining possible until the returned function is called.

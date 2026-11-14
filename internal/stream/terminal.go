@@ -9,26 +9,38 @@ import (
 
 // Terminal manages a live region at the bottom of a terminal stream. Log
 // lines written through Writer or Print appear above the region, which is
-// erased before and redrawn after each of them. It is safe for concurrent use.
+// erased before and redrawn after each of them. While suspended, those lines
+// are held and written, in order, on resume. It is safe for concurrent use.
+//
+// A window that shrinks between a draw and the next erase can leave stray
+// region rows on screen once; that is accepted.
 type Terminal struct {
-	w     io.Writer
-	width func() int
+	w    io.Writer
+	size func() (width, height int)
 
 	mu        sync.Mutex // guards everything below and every write to w or a wrapped destination
 	region    func(width int) []string
 	drawn     int // region rows currently on screen
 	suspended bool
+	held      []heldLines // lines written while suspended, in order
 	closed    bool
 
 	done chan struct{}
 	wg   sync.WaitGroup
 }
 
-// NewTerminal returns a Terminal drawing on w. width reports the terminal width
-// in columns. When tick is non-nil, the region is redrawn on every tick until
-// Close.
-func NewTerminal(w io.Writer, width func() int, tick <-chan time.Time) *Terminal {
-	t := &Terminal{w: w, width: width, done: make(chan struct{})}
+// heldLines are complete lines waiting for the end of a suspension; a nil dst
+// means the terminal stream itself.
+type heldLines struct {
+	dst  io.Writer
+	data []byte
+}
+
+// NewTerminal returns a Terminal drawing on w. size reports the terminal width
+// and height; a height of 0 or less means unknown. When tick is non-nil, the
+// region is redrawn on every tick until Close.
+func NewTerminal(w io.Writer, size func() (width, height int), tick <-chan time.Time) *Terminal {
+	t := &Terminal{w: w, size: size, done: make(chan struct{})}
 	if tick != nil {
 		t.wg.Add(1)
 		go func() {
@@ -69,13 +81,19 @@ func (t *Terminal) Redraw() {
 func (t *Terminal) Print(line string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.suspended {
+		t.held = append(t.held, heldLines{data: []byte(line + "\n")})
+		return
+	}
 	t.eraseLocked()
 	_, _ = io.WriteString(t.w, line+"\n")
 	t.drawLocked()
 }
 
 // Suspend erases the region and stops drawing it until the returned function
-// is called, so that something else can use the terminal.
+// is called, so that something else (a --confirm question) can use the
+// terminal. Lines from Writer and Print are held meanwhile; resume writes them
+// in order, then redraws the region.
 func (t *Terminal) Suspend() (resume func()) {
 	t.mu.Lock()
 	t.eraseLocked()
@@ -84,13 +102,19 @@ func (t *Terminal) Suspend() (resume func()) {
 	return func() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
+		if !t.suspended {
+			return
+		}
 		t.suspended = false
+		t.flushLocked()
 		t.drawLocked()
 	}
 }
 
-// Close stops the tick goroutine and erases the region. The Terminal still
-// passes lines through Writer and Print afterwards, without a region.
+// Close stops the tick goroutine, erases the region and writes any held
+// lines, ending a suspension. The Terminal still passes lines through Writer
+// and Print afterwards, without a region. A buffered partial line is not
+// flushed: the logger writes whole lines.
 func (t *Terminal) Close() {
 	t.mu.Lock()
 	if t.closed {
@@ -101,6 +125,8 @@ func (t *Terminal) Close() {
 	close(t.done)
 	t.eraseLocked()
 	t.region = nil
+	t.suspended = false
+	t.flushLocked()
 	t.mu.Unlock()
 	t.wg.Wait()
 }
@@ -134,9 +160,14 @@ func (tw *termWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	lines := tw.buf[:end]
-	t.eraseLocked()
-	_, err := tw.dst.Write(lines)
-	t.drawLocked()
+	var err error
+	if t.suspended {
+		t.held = append(t.held, heldLines{dst: tw.dst, data: append([]byte(nil), lines...)})
+	} else {
+		t.eraseLocked()
+		_, err = tw.dst.Write(lines)
+		t.drawLocked()
+	}
 	tw.buf = append([]byte(nil), tw.buf[end:]...)
 	if err != nil {
 		return 0, err
@@ -153,14 +184,35 @@ func (t *Terminal) eraseLocked() {
 	t.drawn = 0
 }
 
+// flushLocked writes the held lines to their destinations. No region may be
+// drawn; t.mu must be held.
+func (t *Terminal) flushLocked() {
+	for _, h := range t.held {
+		dst := h.dst
+		if dst == nil {
+			dst = t.w
+		}
+		_, _ = dst.Write(h.data)
+	}
+	t.held = nil
+}
+
 // drawLocked draws the region rows, each cut to one column less than the
-// terminal width so that none wraps. t.mu must be held.
+// terminal width so that none wraps. When the terminal height is known and the
+// rows do not fit above the cursor line, the first height-2 rows are drawn
+// followed by "… and K more", since rows scrolled off the screen could not be
+// erased. t.mu must be held.
 func (t *Terminal) drawLocked() {
 	if t.region == nil || t.suspended {
 		return
 	}
-	limit := max(t.width()-1, 1)
+	width, height := t.size()
+	limit := max(width-1, 1)
 	rows := t.region(limit + 1)
+	if height > 0 && len(rows) > height-1 {
+		keep := max(height-2, 0)
+		rows = append(rows[:keep:keep], fmt.Sprintf("… and %d more", len(rows)-keep))
+	}
 	for _, row := range rows {
 		_, _ = io.WriteString(t.w, truncateRunes(row, limit)+"\n")
 	}

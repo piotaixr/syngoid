@@ -9,7 +9,7 @@ import (
 
 func newTestBar(clk *fakeClock) (*barRenderer, *Terminal, *bytes.Buffer) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, func() int { return 80 }, nil)
+	term := NewTerminal(&buf, func() (int, int) { return 80, 0 }, nil)
 	r := NewRenderer(ProgressBar, term, nil, clk.now).(*barRenderer)
 	return r, term, &buf
 }
@@ -211,7 +211,7 @@ func TestBarETAClamped(t *testing.T) {
 
 func TestBarConcurrent(t *testing.T) {
 	var buf syncBuffer
-	term := NewTerminal(&buf, func() int { return 80 }, nil)
+	term := NewTerminal(&buf, func() (int, int) { return 80, 0 }, nil)
 	r := NewRenderer(ProgressBar, term, nil, time.Now)
 	done := make(chan struct{})
 	for range 8 {

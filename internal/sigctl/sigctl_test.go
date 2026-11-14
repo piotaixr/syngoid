@@ -7,6 +7,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestControllerSequence(t *testing.T) {
@@ -86,21 +87,33 @@ func TestControllerConcurrentHandle(t *testing.T) {
 	}
 }
 
-func TestStopWithoutListenAndIdempotent(t *testing.T) {
+func TestStopWithoutStartAndIdempotent(t *testing.T) {
 	c, _ := New(context.Background(), func(int) {})
 	c.Stop()
 	c.Stop()
 }
 
-func TestListenReceivesSignalsUntilStop(t *testing.T) {
+func TestStartRegistersBeforeReturning(t *testing.T) {
 	c, ctx := New(context.Background(), func(int) {})
-	done := make(chan struct{})
-	go func() { c.Listen(); close(done) }()
-	<-c.listening
+	defer c.Stop()
+	c.Start()
+	// No wait: a SIGHUP right after Start must reach the controller rather
+	// than take the default action (terminating the test binary).
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGHUP did not abort the run")
+	}
 	c.Stop()
-	<-done
+	c.Stop()
+}
+
+func TestStopBeforeStart(t *testing.T) {
+	c, _ := New(context.Background(), func(int) {})
+	c.Stop()
+	c.Start() // must not register or leak a goroutine
+	c.Stop()
 }
