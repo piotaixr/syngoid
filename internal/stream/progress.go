@@ -2,10 +2,8 @@ package stream
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
-	"sync"
 	"time"
 )
 
@@ -19,13 +17,6 @@ const (
 	ProgressPlain ProgressMode = "plain"
 	ProgressNone  ProgressMode = "none"
 )
-
-// barThrottle is the minimum interval between two bar redraws.
-const barThrottle = 200 * time.Millisecond
-
-// maxETASeconds caps the displayed ETA at 99999:59:59 and keeps the Duration
-// conversion from overflowing when the rate is tiny.
-const maxETASeconds = 99999*3600 + 3599
 
 // minTail is the shortest receive tail worth reporting.
 const minTail = time.Second
@@ -53,21 +44,27 @@ type Transfer interface {
 	Finish(rawBytes int64, err error)
 }
 
-// NewRenderer returns the Renderer for mode. ProgressAuto selects the bar when
-// isTTY is true and plain logging otherwise. The bar draws on w; plain logs
-// through log.
-func NewRenderer(mode ProgressMode, w io.Writer, isTTY bool, log *slog.Logger) Renderer {
-	if mode == ProgressAuto {
-		mode = ProgressPlain
-		if isTTY {
-			mode = ProgressBar
-		}
+// ResolveMode turns ProgressAuto into the bar on a TTY and plain logging
+// otherwise. Other modes are returned unchanged.
+func ResolveMode(m ProgressMode, isTTY bool) ProgressMode {
+	if m != ProgressAuto {
+		return m
 	}
+	if isTTY {
+		return ProgressBar
+	}
+	return ProgressPlain
+}
+
+// NewRenderer returns the Renderer for mode. The bar draws its live region on
+// term, which it requires; plain logs through log. ProgressAuto is treated as
+// plain: callers resolve it with ResolveMode first. now is the clock.
+func NewRenderer(mode ProgressMode, term *Terminal, log *slog.Logger, now func() time.Time) Renderer {
 	switch mode {
 	case ProgressBar:
-		return &barRenderer{w: w, now: time.Now}
-	case ProgressPlain:
-		return &plainRenderer{log: log, now: time.Now}
+		return newBarRenderer(term, now)
+	case ProgressPlain, ProgressAuto:
+		return &plainRenderer{log: log, now: now}
 	default:
 		return noneRenderer{}
 	}
@@ -138,81 +135,6 @@ func (t *plainTransfer) Finish(rawBytes int64, err error) {
 		msg += fmt.Sprintf("; zfs receive finished %s later", HumanDuration(tail))
 	}
 	t.r.log.Info(msg)
-}
-
-// barRenderer redraws a single terminal line.
-type barRenderer struct {
-	w   io.Writer
-	now func() time.Time
-
-	mu sync.Mutex
-}
-
-func (b *barRenderer) Start(label string, estimate int64) Transfer {
-	return &barTransfer{r: b, label: label, estimate: estimate, ph: newPhases(b.now)}
-}
-func (*barRenderer) Aborting() {}
-func (*barRenderer) Close()    {}
-
-type barTransfer struct {
-	r        *barRenderer
-	label    string
-	estimate int64
-	ph       phases
-
-	lastDraw time.Time
-	hasDrawn bool
-}
-
-func (t *barTransfer) Update(rawBytes int64) {
-	t.r.mu.Lock()
-	defer t.r.mu.Unlock()
-	now := t.r.now()
-	if t.hasDrawn && now.Sub(t.lastDraw) < barThrottle {
-		return
-	}
-	t.lastDraw, t.hasDrawn = now, true
-	t.draw(rawBytes, now.Sub(t.ph.start), "", "")
-}
-
-func (t *barTransfer) Sent() {
-	t.r.mu.Lock()
-	defer t.r.mu.Unlock()
-	t.ph.markSent()
-}
-
-func (t *barTransfer) Finish(rawBytes int64, _ error) {
-	t.r.mu.Lock()
-	defer t.r.mu.Unlock()
-	elapsed, tail := t.ph.split()
-	suffix := ""
-	if tail >= minTail {
-		suffix = "  zfs receive +" + HumanDuration(tail)
-	}
-	t.draw(rawBytes, elapsed, suffix, "\n")
-}
-
-// draw writes one bar line with suffix inside it and end after it.
-func (t *barTransfer) draw(done int64, elapsed time.Duration, suffix, end string) {
-	r := rate(done, elapsed)
-	rateStr := HumanBytes(int64(r)) + "/s"
-	var line string
-	if t.estimate > 0 {
-		pct := int(float64(done) * 100 / float64(t.estimate))
-		if pct > 100 {
-			pct = 100
-		}
-		var eta time.Duration
-		if remaining := t.estimate - done; r > 0 && remaining > 0 {
-			eta = time.Duration(math.Min(math.Round(float64(remaining)/r), maxETASeconds)) * time.Second
-		}
-		line = fmt.Sprintf("\r%s  %3d%%  %s/%s  %s  ETA %s%s\x1b[K",
-			t.label, pct, HumanBytes(done), HumanBytes(t.estimate), rateStr, HumanDuration(eta), suffix)
-	} else {
-		line = fmt.Sprintf("\r%s  %s  %s%s\x1b[K", t.label, HumanBytes(done), rateStr, suffix)
-	}
-	// A failed terminal write must not abort the transfer being shown.
-	_, _ = io.WriteString(t.r.w, line+end)
 }
 
 // rate returns bytes per second, or 0 when elapsed is not positive.

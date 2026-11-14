@@ -105,7 +105,7 @@ func (e *execEnv) executor(syncSnap string) *Executor {
 		Src: e.srcEP, Dst: e.dstEP, Opts: e.opts,
 		PlanOpts:  PlanOptionsFrom(e.opts, "nas"),
 		Log:       slog.New(e.logs),
-		Progress:  stream.NewRenderer(stream.ProgressNone, io.Discard, false, nil),
+		Progress:  stream.NewRenderer(stream.ProgressNone, nil, nil, time.Now),
 		Confirm:   e.confirm,
 		SendCodec: stream.None, RecvCodec: stream.None,
 		SyncSnap: syncSnap,

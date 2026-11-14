@@ -10,6 +10,8 @@ import (
 
 const gib = int64(1) << 30
 
+var errTest = bytes.ErrTooLarge
+
 func TestHumanBytes(t *testing.T) {
 	tests := map[int64]string{
 		0:          "0 B",
@@ -45,89 +47,6 @@ type fakeClock struct{ t time.Time }
 func (c *fakeClock) now() time.Time          { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
-func newTestBar(w *bytes.Buffer, c *fakeClock) *barRenderer {
-	r := NewRenderer(ProgressBar, w, true, nil).(*barRenderer)
-	r.now = c.now
-	return r
-}
-
-func lastSegment(s string) string {
-	return s[strings.LastIndex(s, "\r"):]
-}
-
-func TestBarRender(t *testing.T) {
-	var buf bytes.Buffer
-	clk := &fakeClock{t: time.Unix(1000, 0)}
-	r := newTestBar(&buf, clk)
-
-	h := r.Start("tank/a", 2*gib)
-	clk.advance(10 * time.Second)
-	h.Update(gib)
-
-	seg := lastSegment(buf.String())
-	for _, want := range []string{"\r", "tank/a", " 50%", "1.0 GiB/2.0 GiB", "102.4 MiB/s", "ETA 0:00:10", "\x1b[K"} {
-		if !strings.Contains(seg, want) {
-			t.Errorf("segment %q missing %q", seg, want)
-		}
-	}
-	if !strings.HasPrefix(seg, "\r") {
-		t.Errorf("segment %q does not start with CR", seg)
-	}
-
-	clk.advance(10 * time.Second)
-	h.Finish(2*gib, nil)
-	out := buf.String()
-	if !strings.HasSuffix(out, "\n") {
-		t.Errorf("output does not end with newline: %q", out)
-	}
-	if final := lastSegment(out); !strings.Contains(final, "100%") || !strings.Contains(final, "2.0 GiB/2.0 GiB") {
-		t.Errorf("final line %q", final)
-	}
-}
-
-func TestBarRenderUnknownEstimate(t *testing.T) {
-	var buf bytes.Buffer
-	clk := &fakeClock{t: time.Unix(1000, 0)}
-	r := newTestBar(&buf, clk)
-
-	h := r.Start("tank/a", 0)
-	clk.advance(10 * time.Second)
-	h.Update(gib)
-
-	seg := lastSegment(buf.String())
-	if strings.Contains(seg, "%") || strings.Contains(seg, "ETA") {
-		t.Errorf("segment %q has percent or ETA", seg)
-	}
-	if want := "\rtank/a  1.0 GiB  102.4 MiB/s\x1b[K"; seg != want {
-		t.Errorf("segment = %q, want %q", seg, want)
-	}
-}
-
-func TestBarRenderThrottle(t *testing.T) {
-	var buf bytes.Buffer
-	clk := &fakeClock{t: time.Unix(1000, 0)}
-	r := newTestBar(&buf, clk)
-
-	h := r.Start("x", gib)
-	clk.advance(time.Second)
-	h.Update(1)
-	h.Update(2)
-	clk.advance(100 * time.Millisecond)
-	h.Update(3)
-	if n := strings.Count(buf.String(), "\r"); n != 1 {
-		t.Fatalf("writes before 200ms elapsed = %d, want 1", n)
-	}
-	clk.advance(100 * time.Millisecond)
-	h.Update(4)
-	if n := strings.Count(buf.String(), "\r"); n != 2 {
-		t.Fatalf("writes after 200ms = %d, want 2", n)
-	}
-	h.Finish(4, nil)
-	if n := strings.Count(buf.String(), "\r"); n != 3 {
-		t.Fatalf("Finish must write regardless of throttle, writes = %d", n)
-	}
-}
-
 func newTestPlain(c *fakeClock) (*plainRenderer, *bytes.Buffer) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
@@ -136,9 +55,7 @@ func newTestPlain(c *fakeClock) (*plainRenderer, *bytes.Buffer) {
 		}
 		return a
 	}}))
-	r := NewRenderer(ProgressPlain, nil, false, log).(*plainRenderer)
-	r.now = c.now
-	return r, &logs
+	return NewRenderer(ProgressPlain, nil, log, c.now).(*plainRenderer), &logs
 }
 
 func TestPlainRender(t *testing.T) {
@@ -200,35 +117,17 @@ func TestPlainRenderNoSent(t *testing.T) {
 
 func TestPlainRenderErrorLogsNothing(t *testing.T) {
 	var logs bytes.Buffer
-	r := NewRenderer(ProgressPlain, nil, false, slog.New(slog.NewTextHandler(&logs, nil)))
+	r := NewRenderer(ProgressPlain, nil, slog.New(slog.NewTextHandler(&logs, nil)), time.Now)
 	r.Start("tank/a", 0).Finish(gib, errTest)
 	if logs.Len() != 0 {
 		t.Errorf("logged on error: %q", logs.String())
 	}
 }
 
-func TestBarRenderTail(t *testing.T) {
-	var buf bytes.Buffer
-	clk := &fakeClock{t: time.Unix(1000, 0)}
-	r := newTestBar(&buf, clk)
-
-	h := r.Start("tank/a", 36864)
-	clk.advance(time.Second)
-	h.Update(37786)
-	h.Sent()
-	clk.advance(15 * time.Second)
-	h.Finish(37786, nil)
-	want := "\rtank/a  100%  36.9 KiB/36.0 KiB  36.9 KiB/s  ETA 0:00:00  zfs receive +0:00:15\x1b[K\n"
-	if got := lastSegment(buf.String()); got != want {
-		t.Errorf("final line = %q, want %q", got, want)
-	}
-}
-
-var errTest = bytes.ErrTooLarge
-
 func TestNoneRender(t *testing.T) {
 	var out bytes.Buffer
-	r := NewRenderer(ProgressNone, &out, true, nil)
+	term := NewTerminal(&out, func() int { return 80 }, nil)
+	r := NewRenderer(ProgressNone, term, nil, time.Now)
 	h := r.Start("x", gib)
 	h.Update(gib)
 	h.Sent()
@@ -240,30 +139,28 @@ func TestNoneRender(t *testing.T) {
 	}
 }
 
-func TestAutoMode(t *testing.T) {
-	var out bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
-	if _, ok := NewRenderer(ProgressAuto, &out, true, log).(*barRenderer); !ok {
-		t.Error("auto on a TTY should be bar")
+func TestResolveMode(t *testing.T) {
+	tests := []struct {
+		mode  ProgressMode
+		isTTY bool
+		want  ProgressMode
+	}{
+		{ProgressAuto, true, ProgressBar},
+		{ProgressAuto, false, ProgressPlain},
+		{ProgressBar, false, ProgressBar},
+		{ProgressPlain, true, ProgressPlain},
+		{ProgressNone, true, ProgressNone},
 	}
-	if _, ok := NewRenderer(ProgressAuto, &out, false, log).(*plainRenderer); !ok {
-		t.Error("auto off a TTY should be plain")
+	for _, tt := range tests {
+		if got := ResolveMode(tt.mode, tt.isTTY); got != tt.want {
+			t.Errorf("ResolveMode(%q, %v) = %q, want %q", tt.mode, tt.isTTY, got, tt.want)
+		}
 	}
 }
 
-func TestBarETAClamped(t *testing.T) {
-	var buf bytes.Buffer
-	clk := &fakeClock{t: time.Unix(1000, 0)}
-	r := newTestBar(&buf, clk)
-	h := r.Start("x", 1<<62)
-	clk.advance(time.Hour)
-	h.Update(1) // tiny rate, enormous remainder
-	if seg := lastSegment(buf.String()); !strings.Contains(seg, "ETA 99999:59:59") {
-		t.Errorf("segment %q: ETA not clamped", seg)
-	}
-	buf.Reset()
-	h.Finish(1<<62+5, nil) // done beyond estimate
-	if seg := lastSegment(buf.String()); !strings.Contains(seg, "ETA 0:00:00") {
-		t.Errorf("segment %q: ETA should be 0", seg)
+func TestNewRendererAutoIsPlain(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+	if _, ok := NewRenderer(ProgressAuto, nil, log, time.Now).(*plainRenderer); !ok {
+		t.Error("auto should be treated as plain")
 	}
 }

@@ -557,7 +557,10 @@ Compress next to `zfs send`, decompress next to `zfs receive`, only when a netwo
 
 Size estimate from `SendEstimate` (`zfs send -nvP`, minimum 4096 bytes when known, `0` = unknown). The sending side
 counts **uncompressed** bytes and reports them (remote: `Event{kind:"progress"}` every 500 ms) so progress is
-comparable to the estimate. `bar`: one updating line (percent, bytes, rate, ETA); the final line's rate covers the
+comparable to the estimate. `bar`: a live region at the bottom of stderr with one row per running transfer (percent, bytes, rate, ETA; a
+"waiting for zfs receive" row once the stream is sent; "aborting…" rows when running transfers are being aborted),
+redrawn every 200 ms; console log lines print above it. On `Finish` the row leaves the region and a permanent line
+is printed above it: the final line's rate covers the
 stream phase only (start until the whole stream was handed to `zfs receive`) and ends with `  zfs receive +H:MM:SS`
 when the receive took at least 1 s longer. `plain`: one line at the end of each transfer,
 `<dataset>: transferred <bytes> in <H:MM:SS> (<rate>/s)`, plus `; zfs receive finished <H:MM:SS> later` when that tail

@@ -64,7 +64,7 @@ func (e *Executor) Run(ctx context.Context, states []DatasetState, plans []Plan)
 		e.Log = slog.New(slog.DiscardHandler)
 	}
 	if e.Progress == nil {
-		e.Progress = stream.NewRenderer(stream.ProgressNone, nil, false, nil)
+		e.Progress = stream.NewRenderer(stream.ProgressNone, nil, nil, time.Now)
 	}
 	r := &runState{
 		e:        e,

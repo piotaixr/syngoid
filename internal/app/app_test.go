@@ -142,6 +142,24 @@ func TestMainSyncQuietNoSummary(t *testing.T) {
 	}
 }
 
+func TestMainSyncBarModeLogsAboveRegion(t *testing.T) {
+	se := newSyncEnv(t, endpoint.HostInfo{})
+	se.StderrIsTTY = true
+	if got := se.run("--progress", "bar", "tank/data", "backup/data"); got != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr %q", got, se.stderr)
+	}
+	out := se.stdout.String()
+	if !strings.Contains(out, "INFO: ") {
+		t.Errorf("stdout has no INFO line:\n%s", out)
+	}
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\r") {
+		t.Errorf("stdout contains terminal control sequences: %q", out)
+	}
+	if !strings.Contains(se.stderr.String(), "tank/data  ") {
+		t.Errorf("stderr has no final bar line: %q", se.stderr)
+	}
+}
+
 func TestMainSudoFlagsReachNewLocal(t *testing.T) {
 	se := newSyncEnv(t, endpoint.HostInfo{})
 	se.run("--source-sudo", "tank/data", "backup/data")

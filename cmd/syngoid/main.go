@@ -39,6 +39,7 @@ func main() {
 		Stderr:      os.Stderr,
 		StdinIsTTY:  stdinIsTTY,
 		StderrIsTTY: isTTY(os.Stderr),
+		TermWidth:   stderrWidth,
 		Hostname:    os.Hostname,
 		Now:         time.Now,
 		NewLocal: func(sudo bool) endpoint.Endpoint {
@@ -134,6 +135,14 @@ func (p *pools) exists(name string) bool {
 		}
 	}
 	return false
+}
+
+// stderrWidth returns the width of the stderr terminal, 80 when unknown.
+func stderrWidth() int {
+	if w, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && w > 0 {
+		return w
+	}
+	return 80
 }
 
 // isTTY reports whether f is a terminal; /dev/null and pipes are not.

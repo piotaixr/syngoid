@@ -28,8 +28,11 @@ type Env struct {
 	Stderr      io.Writer
 	StdinIsTTY  bool
 	StderrIsTTY bool
-	Hostname    func() (string, error)
-	Now         func() time.Time
+	// TermWidth reports the width of the stderr terminal in columns. It may
+	// be nil, meaning 80.
+	TermWidth func() int
+	Hostname  func() (string, error)
+	Now       func() time.Time
 	// NewLocal returns the endpoint of the local host, running zfs through
 	// sudo when sudo is set.
 	NewLocal func(sudo bool) endpoint.Endpoint
@@ -113,7 +116,24 @@ func (p *prompter) ask(question string) bool {
 // runSync implements the sync and permissions commands.
 func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	o := parsed.Options
-	log := logx.New(logx.Config{Stdout: env.Stdout, Stderr: env.Stderr, Quiet: o.Quiet, Debug: o.Debug})
+	mode := stream.ResolveMode(o.Progress, env.StderrIsTTY)
+	if o.Quiet {
+		mode = stream.ProgressNone
+	}
+	stdout, stderr := env.Stdout, env.Stderr
+	var term *stream.Terminal
+	if mode == stream.ProgressBar {
+		width := env.TermWidth
+		if width == nil {
+			width = func() int { return 80 }
+		}
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		term = stream.NewTerminal(env.Stderr, width, ticker.C)
+		defer term.Close()
+		stdout, stderr = term.Writer(env.Stdout), term.Writer(env.Stderr)
+	}
+	log := logx.New(logx.Config{Stdout: stdout, Stderr: stderr, Quiet: o.Quiet, Debug: o.Debug})
 	if env.LoggerReady != nil {
 		env.LoggerReady(log)
 	}
@@ -188,21 +208,22 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 			}
 			return 0
 		}
-		confirm = p.ask
+		confirm = func(q string) bool {
+			if term != nil {
+				defer term.Suspend()()
+			}
+			return p.ask(q)
+		}
 	}
 
 	dstInfo, err := dst.Info(ctx)
 	if err != nil {
 		return criticalf(env, "target host info: %v", err)
 	}
-	mode := o.Progress
-	if o.Quiet {
-		mode = stream.ProgressNone
-	}
 	codec := streamCodec(o)
 	ex := &engine.Executor{
 		Src: src, Dst: dst, Opts: o, PlanOpts: po, Log: log,
-		Progress:          stream.NewRenderer(mode, env.Stderr, env.StderrIsTTY, log),
+		Progress:          stream.NewRenderer(mode, term, log, env.Now),
 		Confirm:           confirm,
 		SendCodec:         codec,
 		RecvCodec:         codec,
