@@ -700,6 +700,10 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   `ssh localhost` as an unprivileged user with only `zfs allow` grants (real bootstrap push, handshake, preflight
   pass/fail — verifying the printed `zfs allow` command fixes it — and `receive -u`); interruption mid-send then
   resume.
+- **Parallel sync (`TestITJobs`):** a tree of seven datasets (root, `a`, `a/x`, `b`, `c`, `c/y`, `d`), each with
+  snapshots `s1` and `s2`, replicated with `--recursive --jobs 3` and with `--jobs 1` into separate targets; every
+  dataset has the same user snapshots on both and exactly one sync snapshot. A further `--jobs 3` run after a new
+  snapshot `s3` everywhere brings `s3` to every target.
 - **FreeBSD and OmniOS, nightly:** VM-based jobs (vmactions) running the same suite.
 - **Cross-compile** all targets on every PR.
 

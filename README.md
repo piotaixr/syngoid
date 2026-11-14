@@ -178,6 +178,17 @@ Options kept from syncoid with the same meaning include `-r/--recursive`, `--ski
 `--include-snaps`, `--exclude-snaps`, `--no-resume`, `--no-clone-handling`, `--dumpsnaps`, `--debug`, `--quiet`,
 `--sendoptions` and `--recvoptions` (same mini-syntax and allow-lists).
 
+`-j/--jobs N` (default 1) replicates up to N datasets at the same time. A child dataset still starts only after its
+parent when the parent needs a first sync (or `--force-delete`). Each running transfer has its own `--buffer-size`
+buffer, so memory use grows with N, and the progress display shows one row per running transfer. Ctrl-C lets
+running transfers finish and starts no new ones; a second Ctrl-C aborts them, and a third exits at once.
+
+### Slow catch-up runs
+
+A receive commits each snapshot of an `-I` stream separately, so a run that carries many snapshots per dataset is
+slow whatever their size. Run syngoid more often so each run carries few snapshots, or use `--jobs` to catch up
+several datasets at once.
+
 ## Differences from syncoid
 
 - **Delegation first.** syngoid never elevates privileges on its own: `zfs` runs as the invoking user and relies on
