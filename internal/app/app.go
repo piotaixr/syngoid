@@ -31,8 +31,10 @@ type Env struct {
 	// TermWidth reports the width of the stderr terminal in columns. It may
 	// be nil, meaning 80.
 	TermWidth func() int
-	Hostname  func() (string, error)
-	Now       func() time.Time
+	// Interrupts lets the user drain a run. It may be nil, meaning never.
+	Interrupts engine.Interrupts
+	Hostname   func() (string, error)
+	Now        func() time.Time
 	// NewLocal returns the endpoint of the local host, running zfs through
 	// sudo when sudo is set.
 	NewLocal func(sudo bool) endpoint.Endpoint
@@ -229,13 +231,14 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 		RecvCodec:         codec,
 		UnprivLinuxTarget: dstInfo.OS == "linux" && dstInfo.UID != 0 && !o.TargetSudo,
 		SyncSnap:          syncSnap,
+		Interrupts:        env.Interrupts,
 	}
 	start := env.Now()
 	results := ex.Run(ctx, states, plans)
 	if !o.Quiet {
 		RenderSummary(env.Stdout, results, env.Now().Sub(start))
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || ex.Drained() {
 		return 2
 	}
 	return engine.ExitCode(results)

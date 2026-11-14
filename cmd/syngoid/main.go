@@ -9,9 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -22,14 +20,15 @@ import (
 	"github.com/piotaixr/syngoid/internal/cli"
 	"github.com/piotaixr/syngoid/internal/dist"
 	"github.com/piotaixr/syngoid/internal/endpoint"
+	"github.com/piotaixr/syngoid/internal/sigctl"
 	"github.com/piotaixr/syngoid/internal/sshx"
 	"github.com/piotaixr/syngoid/internal/zfs"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer stop()
-	go forceExitOnSecondSignal(ctx)
+	ctl, ctx := sigctl.New(context.Background(), os.Exit)
+	go ctl.Listen()
+	defer ctl.Stop()
 
 	var logger *slog.Logger
 	stdinIsTTY := isTTY(os.Stdin)
@@ -40,6 +39,7 @@ func main() {
 		StdinIsTTY:  stdinIsTTY,
 		StderrIsTTY: isTTY(os.Stderr),
 		TermWidth:   stderrWidth,
+		Interrupts:  ctl,
 		Hostname:    os.Hostname,
 		Now:         time.Now,
 		NewLocal: func(sudo bool) endpoint.Endpoint {
@@ -53,7 +53,7 @@ func main() {
 		PoolExists:  (&pools{exec: zfs.OSExec{}, stderr: os.Stderr}).exists,
 	}
 	code := app.Main(ctx, os.Args[1:], env)
-	stop()
+	ctl.Stop()
 	os.Exit(code)
 }
 
@@ -90,17 +90,6 @@ func (c poolConnector) Endpoint(ctx context.Context, loc cli.Location, sudo bool
 }
 
 func (c poolConnector) Close() error { return c.pool.Close() }
-
-// forceExitOnSecondSignal waits for the first SIGINT, SIGTERM or SIGHUP (which
-// cancels ctx and starts the graceful shutdown), then exits with code 2 on
-// the next SIGINT.
-func forceExitOnSecondSignal(ctx context.Context) {
-	<-ctx.Done()
-	again := make(chan os.Signal, 1)
-	signal.Notify(again, syscall.SIGINT)
-	<-again
-	os.Exit(2)
-}
 
 // pools answers whether local ZFS pools exist, for telling host:dataset
 // from a local dataset whose pool name contains a colon. It runs before the

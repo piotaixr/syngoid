@@ -111,7 +111,9 @@ starts and disarms it when `Run` returns, so a Ctrl-C during gather, preflight o
 
 Today's behaviour: context cancellation, agents kill `zfs send`/`receive`, `receive -s` leaves resume tokens.
 New: logged once, when at least one dataset is running, `WARNING: aborting N running transfer(s); press Ctrl-C
-again to exit immediately`, and the progress rows switch to "aborting…" (§6.2).
+again to exit immediately`, and the progress rows switch to "aborting…" (§6.2). Accepted deviation: the warning
+counts running transfers (between progress Start and Finish), so a Ctrl-C landing only in a non-transfer step (busy
+check, post-steps) logs no "aborting" warning.
 
 ## 6. Progress (main spec §9.3)
 

@@ -572,6 +572,9 @@ is at least 1 s (size, stream duration, rate). `none`: nothing. `--quiet` implie
 Context cancellation closes the data streams; agents kill `zfs send`/`receive` process groups. Thanks to
 `receive -s`, a resume token remains for the next run.
 
+A first Ctrl-C during dispatch drains instead (§10.3): running datasets finish their whole remaining plan (send,
+release, bookmark, prune) and nothing new starts.
+
 ## 10. Errors, logging, observability, signals
 
 ### 10.1 Console logging
@@ -604,8 +607,12 @@ Context cancellation closes the data streams; agents kill `zfs send`/`receive` p
 
 ### 10.3 Signals
 
-- First SIGINT/SIGTERM: cancel the run (§9.4), start no new actions, print the summary, exit 2.
-- Second SIGINT: exit immediately.
+- First SIGINT while the executor is dispatching: drain (start no new dataset, let running ones finish), warn
+  `interrupted: finishing N running dataset(s); press Ctrl-C again to abort them (they will resume on the next run)`.
+  Second SIGINT: abort. SIGINT while not dispatching (gather, preflight, planning), SIGTERM and SIGHUP: abort, i.e.
+  cancel the run (§9.4), start no new actions, warn `aborting N running transfer(s); press Ctrl-C again to exit
+  immediately` when transfers run, print the summary, exit 2. SIGINT after an abort: exit immediately (2).
+  SIGTERM/SIGHUP after an abort do nothing more. A drained run also exits 2.
 - Sync snapshots left by interrupted runs are removed by the next successful run's pruning.
 
 ## 11. Release, distribution, trust
