@@ -8,10 +8,13 @@ and honours the same `syncoid:sync` property, so it can take over an existing sy
 Like sanoid/syncoid, syngoid is licensed under the GNU GPL v3; see [LICENSE](LICENSE). The design is described in
 the [spec](docs/superpowers/specs/2026-10-18-syngoid-design.md).
 
-## Status: v0.1.0 (milestone 3a)
+## Status: v0.2.0
 
-v0.1.0 is the first release. Download the archive (`syngoid_<version>_<os>_<arch>.tar.gz`) or the raw binary for your
-platform from the [releases page](https://github.com/piotaixr/syngoid/releases) and check it as shown under
+v0.2.0 adds parallel transfers: `-j/--jobs N` replicates up to N datasets at the same time, the progress display
+shows one row per running transfer (including the time spent waiting for `zfs receive`), and Ctrl-C lets running
+transfers finish before a second Ctrl-C aborts them ([Slow catch-up runs](#slow-catch-up-runs)). Download the archive
+(`syngoid_<version>_<os>_<arch>.tar.gz`) or the raw binary for your platform from the
+[releases page](https://github.com/piotaixr/syngoid/releases) and check it as shown under
 [Agent binaries](#agent-binaries).
 
 SOURCE and TARGET may now be `[user@]host:pool/dataset`, replicated over SSH between any two hosts (local → remote,
