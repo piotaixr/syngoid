@@ -363,3 +363,34 @@ func TestGatherResumeGUID(t *testing.T) {
 		}
 	}
 }
+
+// cancelledResume fails ResumeGUID with the context's error, as a real
+// endpoint does once its context is cancelled.
+type cancelledResume struct{ endpoint.Endpoint }
+
+func (c cancelledResume) ResumeGUID(ctx context.Context, token string) (string, error) {
+	return "", ctx.Err()
+}
+
+func TestGatherResumeGUIDCancelled(t *testing.T) {
+	g := newGatherEnv()
+	g.sw.Snap("tank/data", "one")
+	g.tw.Create("backup", "")
+	fsrc, fdst := fake.New(g.sw, endpoint.HostInfo{}), fake.New(g.tw, endpoint.HostInfo{})
+	fdst.Faults.Receive = func(zfs.RecvSpec) error { return errors.New("connection lost") }
+	if err := transfer(fsrc, fdst, zfs.SendSpec{Dataset: "tank/data", To: "one"}, "backup/data", "-s"); err == nil {
+		t.Fatal("interrupted receive succeeded")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	o := g.opts()
+	o.Recursive = false
+	o.Restore = &cli.RestoreOptions{}
+	src := cancelledResume{fsrc}
+	if st, err := Gather(ctx, src, fdst, o, "syncoid_nas_T"); !errors.Is(err, context.Canceled) || st != nil {
+		t.Errorf("Gather = %+v, %v; want nil, context.Canceled", st, err)
+	}
+	if _, err := GatherOne(ctx, src, fdst, o, "tank/data", "backup/data", "syncoid_nas_T", false); !errors.Is(err, context.Canceled) {
+		t.Errorf("GatherOne err = %v; want context.Canceled", err)
+	}
+}

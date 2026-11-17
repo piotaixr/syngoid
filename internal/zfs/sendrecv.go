@@ -158,9 +158,13 @@ func ParseResumeGUID(out string) string {
 }
 
 // ResumeGUID runs `zfs send -nvP -t token`. A failing command is not an
-// error: the guid is "" unless the output it did print carries one.
+// error: the guid is "" unless the output it did print carries one. A
+// cancelled context is an error.
 func (c *Client) ResumeGUID(ctx context.Context, token string) (string, error) {
 	var out strings.Builder
 	_ = c.Exec.Run(ctx, Cmd{Argv: c.Argv("send", "-nvP", "-t", token), Stdout: &out})
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return ParseResumeGUID(out.String()), nil
 }

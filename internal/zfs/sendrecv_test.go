@@ -221,4 +221,11 @@ func TestClientResumeGUID(t *testing.T) {
 	if got, err := c.ResumeGUID(context.Background(), "tok"); err != nil || got != "" {
 		t.Errorf("failing, no output: ResumeGUID = %q, %v", got, err)
 	}
+	// Cancellation is an error, not "no guid".
+	c, _ = newClient(map[string]zfstest.Response{key: {Exit: 1, Stderr: "killed"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got, err := c.ResumeGUID(ctx, "tok"); !errors.Is(err, context.Canceled) || got != "" {
+		t.Errorf("cancelled: ResumeGUID = %q, %v; want context.Canceled", got, err)
+	}
 }
