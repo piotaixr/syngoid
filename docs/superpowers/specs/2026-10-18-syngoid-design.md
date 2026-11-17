@@ -491,6 +491,22 @@ snapshot is not created). *Behaviour change from syncoid, which created then ign
 **Dry-run estimates:** sends whose endpoint is an existing snapshot use `zfs send -nvP`; sends ending at the
 not-yet-created sync snapshot use the `written@<base>` property (incremental) or `referenced` (full), marked `~`.
 
+**Restore planner:** `PlanRestore(DatasetState, Selection) → Plan` serves the `restore` command (restore design
+§6.2, §6.3). It emits only `SendFull{chosen}` or `Resume{token}`, never an incremental send, a destroy, a hold or a
+bookmark, and ignores `syncoid:sync` and clone origins (a clone is a full send).
+
+| Situation | Outcome |
+|---|---|
+| No snapshot qualifies | soft failure (`no snapshots on <source>`, `no snapshot <NAME> on <source>`, ...) |
+| Target does not exist | `SendFull{chosen}` |
+| Target has a resume token and no snapshots, and the token's guid is the chosen snapshot's | `Resume{token}` |
+| Target has exactly the chosen snapshot (name and guid) and no token | nothing: `already restored at @<chosen>` |
+| Anything else (other or extra snapshots, foreign or unknown-guid token, empty dataset) | critical, `Conflict`: `target <target> already exists` |
+| Target is a pool root | critical, `Conflict`: pool root message pointing to `--skip-parent` |
+
+The "no snapshot qualifies" check comes first, whatever the target holds. `Plan.Notes` are extra lines `RenderPlan`
+prints after the actions of an OK plan.
+
 ### 8.5 DAG and execution order
 
 - Within a dataset, actions run in plan order.

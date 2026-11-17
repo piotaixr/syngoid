@@ -45,6 +45,11 @@ type Plan struct {
 	Actions        []Action
 	Status         Status
 	Message        string
+	// Conflict marks a restore plan that failed because the target dataset
+	// already exists (design §6.3).
+	Conflict bool
+	// Notes are extra lines RenderPlan prints after the actions of an OK plan.
+	Notes []string
 }
 
 // PlanDataset plans the replication of one dataset pair, mirroring

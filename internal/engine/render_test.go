@@ -76,3 +76,17 @@ func TestRenderPlanStatusesAndTotals(t *testing.T) {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestRenderPlanNotes(t *testing.T) {
+	plans := []Plan{{
+		Source: "backup/d", Target: "tank/d", Status: StatusOK,
+		Actions: []Action{SendFull{Snap: "two"}},
+		Notes:   []string{"set compression=zstd", "set quota=10G"},
+	}}
+	var b bytes.Buffer
+	RenderPlan(&b, plans, goldenSync, nil)
+	want := "backup/d → tank/d\n  send full @two\n  set compression=zstd\n  set quota=10G\n"
+	if !strings.HasPrefix(b.String(), want) {
+		t.Errorf("got %q, want prefix %q", b.String(), want)
+	}
+}
