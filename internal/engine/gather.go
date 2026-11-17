@@ -151,6 +151,44 @@ func fillResumeGUIDs(ctx context.Context, src endpoint.Endpoint, states []Datase
 	return nil
 }
 
+// inSourceScope applies the dataset scope rules shared by every command:
+// --skip-parent drops the root of a recursive run and --exclude-datasets
+// drops matches.
+func inSourceScope(o *cli.Options, srcRoot, name string) bool {
+	if o.Recursive && o.SkipParent && name == srcRoot {
+		return false
+	}
+	return !matchesAny(o.ExcludeDatasets, name)
+}
+
+// GatherSource lists the datasets in scope under o.Source.Dataset
+// (honouring Recursive, SkipParent, ExcludeDatasets), in listing order, and
+// their snapshots sorted oldest to newest. A missing source root is an
+// error.
+func GatherSource(ctx context.Context, src endpoint.Endpoint, o *cli.Options) ([]string, map[string][]zfs.Snapshot, error) {
+	root := o.Source.Dataset
+	tree, err := src.ListTree(ctx, root, o.Recursive)
+	if err != nil {
+		return nil, nil, err
+	}
+	all, err := src.ListSnapshots(ctx, root, o.Recursive)
+	if err != nil {
+		return nil, nil, err
+	}
+	var datasets []string
+	snaps := map[string][]zfs.Snapshot{}
+	for _, d := range tree {
+		if !inSourceScope(o, root, d.Name) {
+			continue
+		}
+		datasets = append(datasets, d.Name)
+		s := append([]zfs.Snapshot(nil), all[d.Name]...)
+		SortSnapshots(s)
+		snaps[d.Name] = s
+	}
+	return datasets, snaps, nil
+}
+
 // Gather builds the state of every source dataset under o.Source.Dataset
 // that maps below o.Target.Dataset, in source listing order, with one
 // listing call per kind per side. A missing source root is an error; a
@@ -173,10 +211,7 @@ func Gather(ctx context.Context, src, dst endpoint.Endpoint, o *cli.Options, syn
 	var ds []kept
 	inScope := map[string]bool{}
 	for _, d := range sd.tree {
-		if o.Recursive && o.SkipParent && d.Name == srcRoot {
-			continue
-		}
-		if matchesAny(o.ExcludeDatasets, d.Name) {
+		if !inSourceScope(o, srcRoot, d.Name) {
 			continue
 		}
 		tgt, ok := TargetName(srcRoot, dstRoot, d.Name)

@@ -150,6 +150,12 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
   `--force-delete`, `--include-snaps`, `--exclude-snaps`, `--no-clone-handling`, `--no-resume`, `--dumpsnaps` and the
   deprecated or ignored aliases) are usage errors. `--at`, `--snapshot` and `--list` are usage errors on `sync` and
   `permissions`.
+  `restore --list` opens only the source, gathers the datasets in scope (`-r`, `--skip-parent`,
+  `--exclude-datasets`) with their snapshots, and prints a table, one row per distinct snapshot name, newest first
+  (then by name), with the columns `CREATED` (latest creation among the snapshots of that name, local time, to the
+  minute), `SNAPSHOT` and `DATASETS` (`<have>/<total>`), plus `missing: a, b, c` when one to three datasets lack it
+  and `missing: N datasets` when more (restore design §10). No snapshot in scope prints
+  `WARNING: no snapshots under SOURCE` on stderr and exits 1; any other failure exits 2.
 - **`fetch (--platform OS/ARCH ... | --all) [--dir DIR] [--download-url TEMPLATE] [--quiet] [--debug]`** — downloads
   and verifies (§11.4) the agent binaries for this exact version into the user cache, or into `DIR` (§11.5 layout),
   for pre-seeding before air-gapped use. Exactly one of `--platform` (repeatable, each a §11.1 target) and `--all`

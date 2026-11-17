@@ -48,6 +48,8 @@ type Env struct {
 	// PoolExists reports whether a local ZFS pool of that name exists. It
 	// may be nil, meaning none does.
 	PoolExists func(string) bool
+	// Location is the time zone of displayed times; nil means time.Local.
+	Location *time.Location
 }
 
 // Main runs syngoid with args (excluding the program name) and returns the
@@ -79,7 +81,7 @@ func Main(ctx context.Context, args []string, env Env) int {
 		return runServe(ctx, env)
 	case cli.CmdRestore:
 		if parsed.Options.Restore.List {
-			return criticalf(env, "restore --list is not implemented")
+			return runRestoreList(ctx, env, parsed)
 		}
 	case cli.CmdSync, cli.CmdPermissions:
 	}

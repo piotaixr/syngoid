@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/piotaixr/syngoid/internal/endpoint"
 )
@@ -303,5 +304,48 @@ func TestRestoreConfirmNoTTY(t *testing.T) {
 	}
 	if want := "CRITICAL ERROR: --confirm requires an interactive terminal\n"; se.stderr.String() != want {
 		t.Errorf("stderr = %q, want %q", se.stderr, want)
+	}
+}
+
+func TestRestoreList(t *testing.T) {
+	se := newSyncEnv(t, endpoint.HostInfo{})
+	se.Location = time.UTC
+	se.world.Snap("tank/data", "two")
+	if got := se.run("restore", "--list", "-r", "tank/data"); got != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr %q", got, se.stderr)
+	}
+	want, err := os.ReadFile("testdata/restore_list.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := se.stdout.String(); got != string(want) {
+		t.Errorf("stdout differs from golden:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if calls := se.ep.Calls(); len(calls) != 0 {
+		t.Errorf("listing made mutating calls: %q", calls)
+	}
+	if len(se.newLocalCalls) != 1 {
+		t.Errorf("NewLocal called %d times, want 1", len(se.newLocalCalls))
+	}
+}
+
+func TestRestoreListNoSnapshots(t *testing.T) {
+	se := newSyncEnv(t, endpoint.HostInfo{})
+	se.world.Create("tank/empty", "")
+	if got := se.run("restore", "--list", "tank/empty"); got != 1 {
+		t.Fatalf("exit code = %d, want 1", got)
+	}
+	if !strings.Contains(se.stderr.String(), "WARNING: no snapshots under tank/empty") {
+		t.Errorf("stderr = %q", se.stderr)
+	}
+	if se.stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", se.stdout)
+	}
+}
+
+func TestRestoreListMissingSource(t *testing.T) {
+	se := newSyncEnv(t, endpoint.HostInfo{})
+	if got := se.run("restore", "--list", "tank/nope"); got != 2 {
+		t.Fatalf("exit code = %d, want 2; stdout %q", got, se.stdout)
 	}
 }

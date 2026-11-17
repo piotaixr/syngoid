@@ -9,7 +9,41 @@ import (
 	"github.com/piotaixr/syngoid/internal/cli"
 	"github.com/piotaixr/syngoid/internal/endpoint"
 	"github.com/piotaixr/syngoid/internal/engine"
+	"github.com/piotaixr/syngoid/internal/logx"
 )
+
+// runRestoreList implements restore --list: it opens only the source and
+// prints the restore points of design §10.
+func runRestoreList(ctx context.Context, env Env, parsed cli.Parsed) int {
+	o := parsed.Options
+	log := logx.New(logx.Config{Stdout: env.Stdout, Stderr: env.Stderr, Quiet: o.Quiet, Debug: o.Debug})
+	if env.LoggerReady != nil {
+		env.LoggerReady(log)
+	}
+	for _, w := range parsed.Warnings {
+		log.Warn(w)
+	}
+	src, closeSrc, err := openSource(ctx, env, o, log)
+	if err != nil {
+		return criticalf(env, "%v", err)
+	}
+	defer closeSrc()
+	datasets, snaps, err := engine.GatherSource(ctx, src, o)
+	if err != nil {
+		return criticalf(env, "%v", err)
+	}
+	pts := engine.RestorePoints(datasets, snaps)
+	if len(pts) == 0 {
+		_, _ = fmt.Fprintf(env.Stderr, "WARNING: no snapshots under %s\n", o.Source)
+		return 1
+	}
+	loc := env.Location
+	if loc == nil {
+		loc = time.Local
+	}
+	engine.RenderRestorePoints(env.Stdout, pts, len(datasets), loc)
+	return 0
+}
 
 // restoreNothingQualifies returns the critical message of restore design
 // §5.4 when sel picks a snapshot for no dataset of states, or "".
