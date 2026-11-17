@@ -35,7 +35,7 @@ func TestMainVersion(t *testing.T) {
 	if got := Main(context.Background(), []string{"version"}, env); got != 0 {
 		t.Fatalf("exit code = %d, want 0", got)
 	}
-	re := regexp.MustCompile(`^syngoid dev \(commit unknown, build [0-9a-f]{12}\) protocol 1\n$`)
+	re := regexp.MustCompile(`^syngoid dev \(commit unknown, build [0-9a-f]{12}\) protocol 2\n$`)
 	if out := stdout.String(); !re.MatchString(out) {
 		t.Errorf("stdout %q does not match %v", out, re)
 	}

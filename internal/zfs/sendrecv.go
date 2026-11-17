@@ -139,3 +139,28 @@ func parseEstimate(out string, resume bool) int64 {
 	}
 	return n
 }
+
+// ParseResumeGUID returns, in decimal, the toguid of `zfs send -nvP -t`
+// output, or "" when the output has none.
+func ParseResumeGUID(out string) string {
+	for line := range strings.SplitSeq(out, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || strings.TrimSpace(k) != "toguid" {
+			continue
+		}
+		n, err := strconv.ParseUint(strings.TrimSpace(v), 0, 64)
+		if err != nil {
+			return ""
+		}
+		return strconv.FormatUint(n, 10)
+	}
+	return ""
+}
+
+// ResumeGUID runs `zfs send -nvP -t token`. A failing command is not an
+// error: the guid is "" unless the output it did print carries one.
+func (c *Client) ResumeGUID(ctx context.Context, token string) (string, error) {
+	var out strings.Builder
+	_ = c.Exec.Run(ctx, Cmd{Argv: c.Argv("send", "-nvP", "-t", token), Stdout: &out})
+	return ParseResumeGUID(out.String()), nil
+}

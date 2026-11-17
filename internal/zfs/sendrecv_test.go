@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -177,5 +178,47 @@ func TestSendReceiveReturnExecErrorUnchanged(t *testing.T) {
 		if !errors.As(err, &got) || got != ce || !errors.Is(err, zfs.ErrNoDataset) {
 			t.Errorf("%s: error %v not passed through unchanged", name, err)
 		}
+	}
+}
+
+func TestParseResumeGUID(t *testing.T) {
+	for name, want := range map[string]string{
+		"linux":   "5387764070742741370", // 0x4ac52ee0723bd17a
+		"freebsd": "3850504801561111959", // 0x356fbdb756fc6d97
+		"illumos": "9737808090337195794", // 0x8723a4dd73793712
+	} {
+		b, err := os.ReadFile("testdata/" + name + "/estimate_resume.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := zfs.ParseResumeGUID(string(b)); got != want {
+			t.Errorf("%s: ParseResumeGUID = %q, want %q", name, got, want)
+		}
+	}
+	for _, out := range []string{"", "size\t4096\n", "\ttoguid = zz\n"} {
+		if got := zfs.ParseResumeGUID(out); got != "" {
+			t.Errorf("ParseResumeGUID(%q) = %q, want empty", out, got)
+		}
+	}
+}
+
+func TestClientResumeGUID(t *testing.T) {
+	b, err := os.ReadFile("testdata/linux/estimate_resume.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const key = "zfs send -nvP -t tok"
+	// The guid is read from the output of a failing command too.
+	c, fe := newClient(map[string]zfstest.Response{key: {Stdout: string(b), Exit: 1, Stderr: "boom"}})
+	got, err := c.ResumeGUID(context.Background(), "tok")
+	if err != nil || got != "5387764070742741370" {
+		t.Errorf("ResumeGUID = %q, %v", got, err)
+	}
+	if len(fe.Calls) != 1 || strings.Join(fe.Calls[0], " ") != key {
+		t.Errorf("calls = %v", fe.Calls)
+	}
+	c, _ = newClient(map[string]zfstest.Response{key: {Exit: 1, Stderr: "invalid token"}})
+	if got, err := c.ResumeGUID(context.Background(), "tok"); err != nil || got != "" {
+		t.Errorf("failing, no output: ResumeGUID = %q, %v", got, err)
 	}
 }

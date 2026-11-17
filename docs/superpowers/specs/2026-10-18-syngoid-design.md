@@ -389,7 +389,7 @@ Exit code 2; nothing is modified.
 ### 7.2 Handshake
 
 ```
-initiator → Hello{protocol: 1, version, build_hash, debug: bool, sudo: bool}
+initiator → Hello{protocol: 2, version, build_hash, debug: bool, sudo: bool}
 agent     → Hello{protocol, version, build_hash, exe_sha256, os, arch, user, uid, groups[], zfs_version, home}
 ```
 
@@ -398,6 +398,10 @@ agent     → Hello{protocol, version, build_hash, exe_sha256, os, arch, user, u
 One method per `Endpoint` operation (§4.3), plus `cancel` (cancels the agent-side context of a request id) and
 `shutdown`. Parameters are validated by the agent: dataset and snapshot names must match ZFS naming rules and
 must not start with `-` (argv-injection guard).
+
+Protocol version 2 adds `resume_guid` (params `{token}`; result: the decimal guid of the snapshot a resume token
+resumes, read from `zfs send -nvP -t`, `""` when unreadable). `restore` calls it on the source for a target holding a
+resume token.
 
 ### 7.4 Agent lifecycle
 

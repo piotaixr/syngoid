@@ -10,7 +10,7 @@ import (
 )
 
 // ProtocolVersion is the version of the syngoid wire protocol.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 // These variables are set with -ldflags "-X ...".
 var (

@@ -135,6 +135,22 @@ func buildState(o *cli.Options, src zfs.DatasetInfo, tgtName string, sd sourceDa
 	return st
 }
 
+// fillResumeGUIDs sets ResumeGUID, from the source endpoint, on every state
+// that has a resume token.
+func fillResumeGUIDs(ctx context.Context, src endpoint.Endpoint, states []DatasetState) error {
+	for i := range states {
+		if states[i].ResumeToken == "" {
+			continue
+		}
+		guid, err := src.ResumeGUID(ctx, states[i].ResumeToken)
+		if err != nil {
+			return err
+		}
+		states[i].ResumeGUID = guid
+	}
+	return nil
+}
+
 // Gather builds the state of every source dataset under o.Source.Dataset
 // that maps below o.Target.Dataset, in source listing order, with one
 // listing call per kind per side. A missing source root is an error; a
@@ -176,6 +192,11 @@ func Gather(ctx context.Context, src, dst endpoint.Endpoint, o *cli.Options, syn
 		originDS, _, _ := strings.Cut(k.info.Origin, "@")
 		states = append(states, buildState(o, k.info, k.tgt, sd, td, syncSnap, k.info.Origin != "" && inScope[originDS]))
 	}
+	if o.Restore != nil {
+		if err := fillResumeGUIDs(ctx, src, states); err != nil {
+			return nil, err
+		}
+	}
 	return states, nil
 }
 
@@ -192,7 +213,13 @@ func GatherOne(ctx context.Context, src, dst endpoint.Endpoint, o *cli.Options, 
 	}
 	for _, d := range sd.tree {
 		if d.Name == sourceDS {
-			return buildState(o, d, targetDS, sd, td, syncSnap, originInScope), nil
+			st := []DatasetState{buildState(o, d, targetDS, sd, td, syncSnap, originInScope)}
+			if o.Restore != nil {
+				if err := fillResumeGUIDs(ctx, src, st); err != nil {
+					return DatasetState{}, err
+				}
+			}
+			return st[0], nil
 		}
 	}
 	return DatasetState{}, &zfs.CommandError{
