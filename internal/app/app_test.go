@@ -228,7 +228,10 @@ func TestMainHelp(t *testing.T) {
 	if got := se.run("--help"); got != 0 {
 		t.Fatalf("exit code = %d, want 0", got)
 	}
-	for _, want := range []string{"Usage:", "--dry-run", "--recursive"} {
+	for _, want := range []string{
+		"Usage:", "--dry-run", "--recursive",
+		"syngoid restore [flags] SOURCE TARGET", "syngoid restore --list [flags] SOURCE",
+	} {
 		if !strings.Contains(se.stdout.String(), want) {
 			t.Errorf("help does not contain %q:\n%s", want, se.stdout)
 		}

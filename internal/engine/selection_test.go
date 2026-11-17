@@ -25,10 +25,11 @@ func TestSelectionPick(t *testing.T) {
 		{"name absent", Selection{Name: "zz"}, "", false},
 	}
 	for _, txgs := range []bool{true, false} {
+		// Creation is seconds times 1000 plus a tie-break counter.
 		snaps := []zfs.Snapshot{
-			{Name: "a", GUID: "1", CreateTxg: 10, Creation: 1000},
-			{Name: "b", GUID: "2", CreateTxg: 20, Creation: 2000},
-			{Name: "c", GUID: "3", CreateTxg: 30, Creation: 3000},
+			{Name: "a", GUID: "1", CreateTxg: 10, Creation: 1000_000},
+			{Name: "b", GUID: "2", CreateTxg: 20, Creation: 2000_001},
+			{Name: "c", GUID: "3", CreateTxg: 30, Creation: 3000_000},
 		}
 		if !txgs {
 			for i := range snaps {

@@ -345,6 +345,11 @@ failure.
 | Target | `--preserve-properties` | each locally-set source property that will be passed (§8.6), plus `userprop` if any user property |
 | Target | `--recvoptions` with `o PROP=…` | `PROP` |
 
+`restore` (restore design §8) needs only the `always` rows and the `--preserve-recordsize`,
+`--preserve-properties` and `--recvoptions` rows: `send` on the source, and `receive` (its receive has no `-F`),
+`create` and `mount` on the target. It never needs `snapshot`, `destroy`, `hold`, `release`, `rollback` or
+`bookmark` on either side.
+
 ### 6.3 Effective permission resolution
 
 The agent runs `zfs allow <dataset>` (no privilege needed), whose output lists permission sets on the dataset and its
@@ -748,6 +753,12 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   state, busy, source gone, destination exists, mid-stream disconnect.
 - Engine end-to-end on `FakeEndpoint`: recursive runs, remediation loops, dependency skips, dry-run golden output,
   `--confirm` destructive prompts, exit-code aggregation.
+- `restore` end-to-end on `FakeEndpoint` (`internal/app/restore_test.go`): newest, `--snapshot` and `--at`
+  selection; a re-run does nothing; one existing target dataset stops the whole command with the conflict block and
+  nothing is received; a pool-root target conflicts unless `--skip-parent`; nothing qualifying exits 2 pointing to
+  `--list`; a parent without the chosen snapshot fails soft and skips its children; a missing target parent fails as
+  in `sync`; `--dry-run --preserve-properties` golden output with `set` lines; restore-only preflight needs; no
+  call that snapshots, destroys, holds, releases or bookmarks.
 - RPC end-to-end: initiator ↔ real agent over `net.Pipe` + yamux, agent backed by `FakeEndpoint`: handshake and
   version mismatch, streaming, cancellation, child cleanup on stdin EOF.
 

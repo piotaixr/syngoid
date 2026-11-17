@@ -60,6 +60,8 @@ func Main(ctx context.Context, args []string, env Env) int {
 	}
 	if errors.Is(err, cli.ErrHelp) {
 		_, _ = fmt.Fprintf(env.Stdout, "Usage: syngoid [sync] [flags] SOURCE TARGET\n"+
+			"       syngoid restore [flags] SOURCE TARGET\n"+
+			"       syngoid restore --list [flags] SOURCE\n"+
 			"       syngoid permissions [flags] SOURCE TARGET\n"+
 			"       syngoid fetch (--platform OS/ARCH ... | --all) [--dir DIR]\n"+
 			"       syngoid version\n\nFlags:\n%s", cli.Usage())
@@ -76,7 +78,9 @@ func Main(ctx context.Context, args []string, env Env) int {
 	case cli.CmdServe:
 		return runServe(ctx, env)
 	case cli.CmdRestore:
-		return criticalf(env, "restore is not implemented yet")
+		if parsed.Options.Restore.List {
+			return criticalf(env, "restore --list is not implemented")
+		}
 	case cli.CmdSync, cli.CmdPermissions:
 	}
 	return runSync(ctx, env, parsed)
@@ -117,7 +121,7 @@ func (p *prompter) ask(question string) bool {
 	return false
 }
 
-// runSync implements the sync and permissions commands.
+// runSync implements the sync, restore and permissions commands.
 func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	o := parsed.Options
 	mode := stream.ResolveMode(o.Progress, env.StderrIsTTY)
@@ -144,7 +148,7 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	for _, w := range parsed.Warnings {
 		log.Warn(w)
 	}
-	if parsed.Command == cli.CmdSync && o.Confirm && !env.StdinIsTTY {
+	if parsed.Command != cli.CmdPermissions && o.Confirm && !env.StdinIsTTY {
 		return criticalf(env, "--confirm requires an interactive terminal")
 	}
 	host, err := env.Hostname()
@@ -167,6 +171,20 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 		dumpSnaps(log, states)
 	}
 
+	var planner func(engine.DatasetState) engine.Plan
+	var plans []engine.Plan
+	if o.Restore != nil {
+		sel := engine.SelectionFrom(o.Restore)
+		if msg := restoreNothingQualifies(o, sel, states); msg != "" {
+			return criticalf(env, "%s", msg)
+		}
+		planner = func(s engine.DatasetState) engine.Plan { return engine.PlanRestore(s, sel) }
+		plans = planAll(states, planner)
+		if msg := restoreConflicts(o, states, plans); msg != "" {
+			return criticalf(env, "%s", msg)
+		}
+	}
+
 	report, err := engine.Preflight(ctx, src, dst, o, states)
 	if err != nil {
 		return criticalf(env, "%v", err)
@@ -184,9 +202,18 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	}
 
 	po := engine.PlanOptionsFrom(o, host)
-	plans := make([]engine.Plan, len(states))
-	for i, s := range states {
-		plans[i] = engine.PlanDataset(s, po)
+	if plans == nil {
+		plans = planAll(states, func(s engine.DatasetState) engine.Plan { return engine.PlanDataset(s, po) })
+	}
+	dstInfo, err := dst.Info(ctx)
+	if err != nil {
+		return criticalf(env, "target host info: %v", err)
+	}
+	unprivLinux := dstInfo.OS == "linux" && dstInfo.UID != 0 && !o.TargetSudo
+	if o.Restore != nil && o.PreserveProperties && (o.DryRun || o.Confirm) {
+		if err := addPreservedPropNotes(ctx, src, plans, unprivLinux); err != nil {
+			return criticalf(env, "%v", err)
+		}
 	}
 	estimate := func(p engine.Plan, a engine.Action) (int64, bool) {
 		for _, s := range states {
@@ -220,18 +247,14 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 		}
 	}
 
-	dstInfo, err := dst.Info(ctx)
-	if err != nil {
-		return criticalf(env, "target host info: %v", err)
-	}
 	codec := streamCodec(o)
 	ex := &engine.Executor{
-		Src: src, Dst: dst, Opts: o, PlanOpts: po, Log: log,
+		Src: src, Dst: dst, Opts: o, PlanOpts: po, Planner: planner, Log: log,
 		Progress:          stream.NewRenderer(mode, term, log, env.Now),
 		Confirm:           confirm,
 		SendCodec:         codec,
 		RecvCodec:         codec,
-		UnprivLinuxTarget: dstInfo.OS == "linux" && dstInfo.UID != 0 && !o.TargetSudo,
+		UnprivLinuxTarget: unprivLinux,
 		SyncSnap:          syncSnap,
 		Interrupts:        env.Interrupts,
 	}
@@ -244,6 +267,15 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 		return 2
 	}
 	return engine.ExitCode(results)
+}
+
+// planAll plans every state with planner.
+func planAll(states []engine.DatasetState, planner func(engine.DatasetState) engine.Plan) []engine.Plan {
+	plans := make([]engine.Plan, len(states))
+	for i, s := range states {
+		plans[i] = planner(s)
+	}
+	return plans
 }
 
 // dumpSnaps logs the snapshot names of every dataset pair.

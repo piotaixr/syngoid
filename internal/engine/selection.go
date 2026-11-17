@@ -34,7 +34,8 @@ func (sel Selection) Pick(snaps []zfs.Snapshot) (zfs.Snapshot, bool) {
 		}
 	case sel.At != nil:
 		for i := len(snaps) - 1; i >= 0; i-- {
-			if int64(snaps[i].Creation) <= sel.At.Unix() {
+			// Creation is seconds times 1000 plus a tie-break counter.
+			if int64(snaps[i].Creation/1000) <= sel.At.Unix() {
 				return snaps[i], true
 			}
 		}
