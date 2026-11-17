@@ -111,6 +111,9 @@ Every other `sync` flag is a usage error on `restore`, with a message naming the
 `--no-resume` (R14), `--dumpsnaps`, and the deprecated or ignored aliases `sync` still accepts.
 `--at`, `--snapshot` and `--list` are usage errors on `sync` and `permissions`.
 
+`--sendoptions` containing `R` is a usage error on `restore` (it sends one snapshot per dataset, never a replication
+stream): `--sendoptions R is not available with restore: restore sends one snapshot per dataset`.
+
 With `--list`, only `-r`, `--skip-parent`, `--exclude-datasets`, the source sudo flags, the ssh flags, the agent
 distribution flags, `--debug` and `--quiet` are accepted.
 

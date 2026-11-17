@@ -122,6 +122,10 @@ func TestParseRestoreRejects(t *testing.T) {
 		args := append(append([]string{"restore"}, f...), "S", "T")
 		cases = append(cases, tc{args, f[0] + " is not available with restore"})
 	}
+	cases = append(cases,
+		tc{[]string{"restore", "--sendoptions=R", "S", "T"}, "--sendoptions R is not available with restore: restore sends one snapshot per dataset"},
+		tc{[]string{"restore", "--sendoptions=wR", "S", "T"}, "--sendoptions R is not available with restore: restore sends one snapshot per dataset"},
+	)
 	for _, f := range [][]string{
 		{"--dry-run"},
 		{"--jobs", "2"},

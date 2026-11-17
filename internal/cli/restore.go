@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+
+	"github.com/piotaixr/syngoid/internal/zfs"
 )
 
 // RestoreOptions is set on Options for the restore command only.
@@ -78,6 +80,15 @@ func (r *raw) checkRestoreFlags(fs *pflag.FlagSet, cmd Command, pos []string) (*
 		}
 	} else if len(pos) != 2 {
 		return nil, fmt.Errorf("restore requires exactly SOURCE and TARGET (got %d arguments)", len(pos))
+	}
+	sendOpts, err := zfs.ParseOpts(r.sendOptions)
+	if err != nil {
+		return nil, fmt.Errorf("--sendoptions: %w", err)
+	}
+	for _, so := range sendOpts {
+		if so.Flag == 'R' {
+			return nil, errors.New("--sendoptions R is not available with restore: restore sends one snapshot per dataset")
+		}
 	}
 	ro := &RestoreOptions{List: r.list}
 	if fs.Changed("at") && fs.Changed("snapshot") {
