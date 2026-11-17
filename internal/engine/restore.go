@@ -20,12 +20,12 @@ func PlanRestore(s DatasetState, sel Selection) Plan {
 	if !ok {
 		return stop(StatusSoft, sel.Missing(s.Source, s.SourceSnaps))
 	}
+	if s.TargetIsPoolRoot {
+		return conflict("target " + s.Target + " is a pool root and always exists; restore its children with --skip-parent")
+	}
 	if !s.TargetExists {
 		p.Actions = []Action{SendFull{Snap: chosen.Name}}
 		return p
-	}
-	if s.TargetIsPoolRoot {
-		return conflict("target " + s.Target + " is a pool root and always exists; restore its children with --skip-parent")
 	}
 	if restoreFinished(s.TargetSnaps, s.ResumeToken, chosen) {
 		return stop(StatusNothing, "already restored at @"+chosen.Name)

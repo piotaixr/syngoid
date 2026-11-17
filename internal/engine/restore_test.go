@@ -56,6 +56,7 @@ func restoreCases() []struct {
 		}), Selection{}, StatusCritical, "", exists, true},
 		{"empty existing target", with(func(s *DatasetState) { s.TargetExists = true }), Selection{}, StatusCritical, "", exists, true},
 		{"pool root", with(func(s *DatasetState) { s.Target = "tank"; s.TargetExists = true; s.TargetIsPoolRoot = true }), Selection{}, StatusCritical, "", "target tank is a pool root and always exists; restore its children with --skip-parent", true},
+		{"pool root, target not existing", with(func(s *DatasetState) { s.Target = "tank"; s.TargetExists = false; s.TargetIsPoolRoot = true }), Selection{}, StatusCritical, "", "target tank is a pool root and always exists; restore its children with --skip-parent", true},
 		{"sync property is ignored", with(func(s *DatasetState) { s.SyncProp = "false" }), Selection{}, StatusOK, "send full @two", "", false},
 		{"clone is a full send", with(func(s *DatasetState) { s.Origin = "backup/o@x"; s.OriginInScope = true }), Selection{}, StatusOK, "send full @two", "", false},
 	}
