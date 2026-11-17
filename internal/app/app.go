@@ -207,12 +207,14 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 	if plans == nil {
 		plans = planAll(states, func(s engine.DatasetState) engine.Plan { return engine.PlanDataset(s, po) })
 	}
-	dstInfo, err := dst.Info(ctx)
-	if err != nil {
-		return criticalf(env, "target host info: %v", err)
-	}
-	unprivLinux := dstInfo.OS == "linux" && dstInfo.UID != 0 && !o.TargetSudo
+	var dstInfo endpoint.HostInfo
+	haveInfo := false
 	if o.Restore != nil && o.PreserveProperties && (o.DryRun || o.Confirm) {
+		if dstInfo, err = dst.Info(ctx); err != nil {
+			return criticalf(env, "target host info: %v", err)
+		}
+		haveInfo = true
+		unprivLinux := dstInfo.OS == "linux" && dstInfo.UID != 0 && !o.TargetSudo
 		if err := addPreservedPropNotes(ctx, src, plans, unprivLinux); err != nil {
 			return criticalf(env, "%v", err)
 		}
@@ -249,6 +251,11 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 		}
 	}
 
+	if !haveInfo {
+		if dstInfo, err = dst.Info(ctx); err != nil {
+			return criticalf(env, "target host info: %v", err)
+		}
+	}
 	codec := streamCodec(o)
 	ex := &engine.Executor{
 		Src: src, Dst: dst, Opts: o, PlanOpts: po, Planner: planner, Log: log,
@@ -256,7 +263,7 @@ func runSync(ctx context.Context, env Env, parsed cli.Parsed) int {
 		Confirm:           confirm,
 		SendCodec:         codec,
 		RecvCodec:         codec,
-		UnprivLinuxTarget: unprivLinux,
+		UnprivLinuxTarget: dstInfo.OS == "linux" && dstInfo.UID != 0 && !o.TargetSudo,
 		SyncSnap:          syncSnap,
 		Interrupts:        env.Interrupts,
 	}
