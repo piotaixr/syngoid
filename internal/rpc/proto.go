@@ -31,6 +31,7 @@ const (
 	MethodBookmark       = "bookmark"
 	MethodAbortResume    = "abort_resume"
 	MethodSendEstimate   = "send_estimate"
+	MethodResumeGUID     = "resume_guid"
 	MethodReceiveBusy    = "receive_busy"
 	MethodSend           = "send"
 	MethodReceive        = "receive"
@@ -196,6 +197,11 @@ type BookmarkParams struct {
 // SendEstimateParams is the params of send_estimate.
 type SendEstimateParams struct {
 	Spec zfs.SendSpec `json:"spec"`
+}
+
+// ResumeGUIDParams is the params of resume_guid.
+type ResumeGUIDParams struct {
+	Token string `json:"token"`
 }
 
 // ReceiveBusyParams is the params of receive_busy.

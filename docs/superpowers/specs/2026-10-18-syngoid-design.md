@@ -120,6 +120,9 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
 | `--download-url=TEMPLATE` | Mirror URL template with `{version}`, `{os}`, `{arch}`, `{file}` placeholders. Default: `https://github.com/piotaixr/syngoid/releases/download/v{version}/{file}`. |
 | `--bin-store=DIR` | Additional local directory searched for agent binaries (`DIR/<os>-<arch>/syngoid`). |
 | `--remote-bin-dir=DIR` | Remote directory for the agent binary (default `~/.cache/syngoid/<ver>`). |
+| `--at=TIME` | `restore` only: for each dataset, restore the newest snapshot created at or before TIME (`2026-11-10`, `2026-11-10T03:00`, `2026-11-10T03:00:00`, or RFC 3339 with an offset; a space may replace the `T`; without an offset, local time; a date alone is 00:00:00). Mutually exclusive with `--snapshot`. |
+| `--snapshot=NAME` | `restore` only: restore the snapshot named NAME (the part after `@`) of each dataset. |
+| `--list` | `restore` only: list the restore points of SOURCE and exit; takes no TARGET and only `-r`, `--skip-parent`, `--exclude-datasets`, the source sudo flags, the ssh flags, the agent distribution flags, `--debug` and `--quiet`. |
 | `--otel-endpoint=URL` | Enable OTLP/HTTP log export to URL (also enabled by standard `OTEL_EXPORTER_OTLP_*` env vars). |
 
 ### 3.6 Removed options
@@ -138,6 +141,21 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
 - **`permissions SOURCE TARGET [OPTIONS]`** — connects to both sides (same bootstrap as `sync`), computes the
   required permission set from OPTIONS (§6.2), checks it, and prints both the full minimal grant commands and the
   missing grants for each side. Exit 0 if everything is granted, 2 otherwise.
+- **`restore [OPTIONS] SOURCE TARGET`** and **`restore --list [OPTIONS] SOURCE`** — rebuilds TARGET from the backup
+  at SOURCE, the opposite direction of `sync` (design: `2026-11-15-syngoid-restore-design.md`). The point is the
+  newest snapshot, `--at TIME` or `--snapshot NAME`. Takes the `sync` options that still apply (`-r`,
+  `--skip-parent`, `--exclude-datasets`, `--preserve-*`, `-j`, transfer, ssh, sudo, agent and dry-run options); the
+  options that create, roll back, delete or clone (`--identifier`, `--no-stream`, `--no-sync-snap`,
+  `--keep-sync-snap`, `--create-bookmark`, `--use-hold`, `--no-rollback`, `--delete-target-snapshots`,
+  `--force-delete`, `--include-snaps`, `--exclude-snaps`, `--no-clone-handling`, `--no-resume`, `--dumpsnaps` and the
+  deprecated or ignored aliases) are usage errors. `--at`, `--snapshot` and `--list` are usage errors on `sync` and
+  `permissions`.
+  `restore --list` opens only the source, gathers the datasets in scope (`-r`, `--skip-parent`,
+  `--exclude-datasets`) with their snapshots, and prints a table, one row per distinct snapshot name, newest first
+  (then by name), with the columns `CREATED` (latest creation among the snapshots of that name, local time, to the
+  minute), `SNAPSHOT` and `DATASETS` (`<have>/<total>`), plus `missing: a, b, c` when one to three datasets lack it
+  and `missing: N datasets` when more (restore design §10). No snapshot in scope prints
+  `WARNING: no snapshots under SOURCE` on stderr and exits 1; any other failure exits 2.
 - **`fetch (--platform OS/ARCH ... | --all) [--dir DIR] [--download-url TEMPLATE] [--quiet] [--debug]`** — downloads
   and verifies (§11.4) the agent binaries for this exact version into the user cache, or into `DIR` (§11.5 layout),
   for pre-seeding before air-gapped use. Exactly one of `--platform` (repeatable, each a §11.1 target) and `--all`
@@ -333,6 +351,11 @@ failure.
 | Target | `--preserve-properties` | each locally-set source property that will be passed (§8.6), plus `userprop` if any user property |
 | Target | `--recvoptions` with `o PROP=…` | `PROP` |
 
+`restore` (restore design §8) needs only the `always` rows and the `--preserve-recordsize`,
+`--preserve-properties` and `--recvoptions` rows: `send` on the source, and `receive` (its receive has no `-F`),
+`create` and `mount` on the target. It never needs `snapshot`, `destroy`, `hold`, `release`, `rollback` or
+`bookmark` on either side.
+
 ### 6.3 Effective permission resolution
 
 The agent runs `zfs allow <dataset>` (no privilege needed), whose output lists permission sets on the dataset and its
@@ -377,7 +400,7 @@ Exit code 2; nothing is modified.
 ### 7.2 Handshake
 
 ```
-initiator → Hello{protocol: 1, version, build_hash, debug: bool, sudo: bool}
+initiator → Hello{protocol: 2, version, build_hash, debug: bool, sudo: bool}
 agent     → Hello{protocol, version, build_hash, exe_sha256, os, arch, user, uid, groups[], zfs_version, home}
 ```
 
@@ -386,6 +409,10 @@ agent     → Hello{protocol, version, build_hash, exe_sha256, os, arch, user, u
 One method per `Endpoint` operation (§4.3), plus `cancel` (cancels the agent-side context of a request id) and
 `shutdown`. Parameters are validated by the agent: dataset and snapshot names must match ZFS naming rules and
 must not start with `-` (argv-injection guard).
+
+Protocol version 2 adds `resume_guid` (params `{token}`; result: the decimal guid of the snapshot a resume token
+resumes, read from `zfs send -nvP -t`, `""` when unreadable). `restore` calls it on the source for a target holding a
+resume token.
 
 ### 7.4 Agent lifecycle
 
@@ -475,6 +502,22 @@ snapshot is not created). *Behaviour change from syncoid, which created then ign
 **Dry-run estimates:** sends whose endpoint is an existing snapshot use `zfs send -nvP`; sends ending at the
 not-yet-created sync snapshot use the `written@<base>` property (incremental) or `referenced` (full), marked `~`.
 
+**Restore planner:** `PlanRestore(DatasetState, Selection) → Plan` serves the `restore` command (restore design
+§6.2, §6.3). It emits only `SendFull{chosen}` or `Resume{token}`, never an incremental send, a destroy, a hold or a
+bookmark, and ignores `syncoid:sync` and clone origins (a clone is a full send).
+
+| Situation | Outcome |
+|---|---|
+| No snapshot qualifies | soft failure (`no snapshots on <source>`, `no snapshot <NAME> on <source>`, ...) |
+| Target does not exist | `SendFull{chosen}` |
+| Target has a resume token and no snapshots, and the token's guid is the chosen snapshot's | `Resume{token}` |
+| Target has exactly the chosen snapshot (name and guid) and no token | nothing: `already restored at @<chosen>` |
+| Anything else (other or extra snapshots, foreign or unknown-guid token, empty dataset) | critical, `Conflict`: `target <target> already exists` |
+| Target is a pool root | critical, `Conflict`: pool root message pointing to `--skip-parent` |
+
+The "no snapshot qualifies" check comes first, whatever the target holds. `Plan.Notes` are extra lines `RenderPlan`
+prints after the actions of an OK plan.
+
 ### 8.5 DAG and execution order
 
 - Within a dataset, actions run in plan order.
@@ -505,7 +548,8 @@ Built per receive: `-s` unless `--no-resume`; `-F` unless `--no-rollback`; `-u` 
 
 Before each send: check the target is not busy (`ReceiveBusy`; busy → soft failure for that dataset) and that the
 action's preconditions hold (incremental base exists on both sides with equal guid). Stale preconditions → re-gather
-and re-plan the dataset.
+and re-plan the dataset. The executor re-plans (refresh, re-gather, remediation) with the planner it was given,
+so `restore` never falls back to the sync planner.
 
 Typed errors from `internal/zfs` (stderr classification, `LC_ALL=C`):
 
@@ -715,6 +759,12 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   state, busy, source gone, destination exists, mid-stream disconnect.
 - Engine end-to-end on `FakeEndpoint`: recursive runs, remediation loops, dependency skips, dry-run golden output,
   `--confirm` destructive prompts, exit-code aggregation.
+- `restore` end-to-end on `FakeEndpoint` (`internal/app/restore_test.go`): newest, `--snapshot` and `--at`
+  selection; a re-run does nothing; one existing target dataset stops the whole command with the conflict block and
+  nothing is received; a pool-root target conflicts unless `--skip-parent`; nothing qualifying exits 2 pointing to
+  `--list`; a parent without the chosen snapshot fails soft and skips its children; a missing target parent fails as
+  in `sync`; `--dry-run --preserve-properties` golden output with `set` lines; restore-only preflight needs; no
+  call that snapshots, destroys, holds, releases or bookmarks.
 - RPC end-to-end: initiator ↔ real agent over `net.Pipe` + yamux, agent backed by `FakeEndpoint`: handshake and
   version mismatch, streaming, cancellation, child cleanup on stdin EOF.
 
@@ -728,6 +778,17 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   snapshots `s1` and `s2`, replicated with `--recursive --jobs 3` and with `--jobs 1` into separate targets; every
   dataset has the same user snapshots (`s1`, `s2`) on both and at least one sync snapshot. A further `--jobs 3` run
   after a new snapshot `s3` everywhere brings `s3` to every target.
+- **Restore (`TestITRestore*`, design in `2026-11-15-syngoid-restore-design.md` §12):**
+  - `TestITRestoreNewest`: recursive restore of the newest snapshot; data and guids match, one snapshot per target dataset, source untouched.
+  - `TestITRestoreSnapshotAndAt`: `--snapshot` and `--at` pick the expected snapshot per dataset.
+  - `TestITRestoreRerunAndConflict`: a finished restore re-run does nothing and exits 0; a local snapshot on the target fails the re-run with nothing sent.
+  - `TestITRestoreRerunAfterNewSourceSnapshot`: a re-run after a new source snapshot exits 2 with nothing sent, both sides unchanged.
+  - `TestITRestoreExistingTargetSendsNothing`: an existing target dataset fails the command, target unchanged.
+  - `TestITRestoreInterruptThenResume`: an interrupted restore resumes on re-run.
+  - `TestITRestoreAbortOwnPartial`: a restore's own partial receive whose source snapshot is gone leaves the rest of the target and the source unchanged.
+  - `TestITRestoreClone`: a clone is restored as an independent dataset.
+  - `TestITRestoreUnprivileged`: restore with only the §8 delegations.
+  - `TestITRestoreThenReplicateBack`: syngoid from the restored dataset back to the backup sends an incremental.
 - **FreeBSD and OmniOS, nightly:** VM-based jobs (vmactions) running the same suite.
 - **Cross-compile** all targets on every PR.
 

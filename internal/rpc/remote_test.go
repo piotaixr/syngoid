@@ -180,6 +180,9 @@ func TestRemoteQueriesMatchFake(t *testing.T) {
 		w9, f9 := f.SendEstimate(ctx, spec)
 		same(fmt.Sprintf("SendEstimate %+v", spec), g9, w9, e9, f9)
 	}
+	g11, e11 := r.ResumeGUID(ctx, "no-such-token")
+	w11, f11 := f.ResumeGUID(ctx, "no-such-token")
+	same("ResumeGUID", g11, w11, e11, f11)
 	g10, e10 := r.Info(ctx)
 	w10, f10 := f.Info(ctx)
 	same("Info", g10, w10, e10, f10)

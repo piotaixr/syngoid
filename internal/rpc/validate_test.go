@@ -61,6 +61,8 @@ func TestValidate(t *testing.T) {
 		{"send option o", MethodSend, SendParams{Spec: zfs.SendSpec{Dataset: "tank/a", Options: []zfs.Opt{{Flag: 'o'}}}}, "spec.options"},
 		{"send option with value", MethodSend, SendParams{Spec: zfs.SendSpec{Dataset: "tank/a", Options: []zfs.Opt{{Flag: 'R', Value: "x"}}}}, "spec.options"},
 		{"send_estimate bad", MethodSendEstimate, SendEstimateParams{Spec: zfs.SendSpec{Dataset: "tank/a", Options: []zfs.Opt{{Flag: 'o'}}}}, "spec.options"},
+		{"resume_guid ok", MethodResumeGUID, ResumeGUIDParams{Token: "1-abc-def"}, ""},
+		{"resume_guid empty", MethodResumeGUID, ResumeGUIDParams{}, "token"},
 		{"send_estimate ok", MethodSendEstimate, SendEstimateParams{Spec: zfs.SendSpec{Dataset: "tank/a"}}, ""},
 		{"receive ok", MethodReceive, ReceiveParams{Spec: zfs.RecvSpec{Dataset: "tank/b", Args: []string{"-s", "-F", "-o", "compression=lz4", "-x", "mountpoint"}}}, ""},
 		{"receive bad dataset", MethodReceive, ReceiveParams{Spec: zfs.RecvSpec{Dataset: "-F"}}, "spec.dataset"},

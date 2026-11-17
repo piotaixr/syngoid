@@ -415,6 +415,11 @@ func (r *Remote) SendEstimate(ctx context.Context, s zfs.SendSpec) (int64, error
 	return query[int64](ctx, r, MethodSendEstimate, SendEstimateParams{Spec: s})
 }
 
+// ResumeGUID returns the guid of the snapshot the resume token resumes.
+func (r *Remote) ResumeGUID(ctx context.Context, token string) (string, error) {
+	return query[string](ctx, r, MethodResumeGUID, ResumeGUIDParams{Token: token})
+}
+
 // ReceiveBusy reports which of datasets are the target of a running receive.
 func (r *Remote) ReceiveBusy(ctx context.Context, datasets []string) (map[string]bool, error) {
 	return query[map[string]bool](ctx, r, MethodReceiveBusy, ReceiveBusyParams{Datasets: datasets})

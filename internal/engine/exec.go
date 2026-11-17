@@ -29,12 +29,23 @@ const (
 	msgDeclined = "destructive action declined"
 )
 
+// plan plans one dataset with the executor's planner.
+func (e *Executor) plan(s DatasetState) Plan {
+	if e.Planner != nil {
+		return e.Planner(s)
+	}
+	return PlanDataset(s, e.PlanOpts)
+}
+
 // Executor runs the planned replication of every dataset from Src to Dst
 // (spec §8.5, §8.7).
 type Executor struct {
 	Src, Dst endpoint.Endpoint
 	Opts     *cli.Options
 	PlanOpts PlanOptions
+	// Planner plans one dataset wherever the executor plans again (refresh,
+	// regather, replan). nil means PlanDataset with PlanOpts.
+	Planner  func(DatasetState) Plan
 	Log      *slog.Logger
 	Progress stream.Renderer
 	// Confirm, when non-nil, is asked before every destructive step; false
@@ -413,7 +424,7 @@ func (r *runState) regather(ctx context.Context, i int) bool {
 		return false
 	}
 	st = stripSyncSnap(st)
-	p := PlanDataset(st, r.e.PlanOpts)
+	p := r.e.plan(st)
 	r.states[i], r.plans[i] = st, p
 	if p.Status != StatusOK {
 		r.finish(i, p.Status, p.Message, nil)
@@ -606,7 +617,7 @@ func (r *runState) refresh(ctx context.Context) {
 			continue
 		}
 		s = stripSyncSnap(s)
-		p := PlanDataset(s, r.e.PlanOpts)
+		p := r.e.plan(s)
 		if !samePlan(p, r.plans[i]) {
 			r.e.Log.Warn("plan for " + s.Source + " changed since planning; executing updated plan")
 		}

@@ -42,7 +42,7 @@ func TestCheckHello(t *testing.T) {
 		edit   func(*rpc.HelloReply)
 		pushed string
 	}{
-		"protocol":   {edit: func(r *rpc.HelloReply) { r.Protocol = 2 }},
+		"protocol":   {edit: func(r *rpc.HelloReply) { r.Protocol = buildinfo.ProtocolVersion + 1 }},
 		"version":    {edit: func(r *rpc.HelloReply) { r.Version = "1.0.1" }},
 		"build hash": {edit: func(r *rpc.HelloReply) { r.BuildHash = "other" }},
 		"pushed SHA": {edit: func(*rpc.HelloReply) {}, pushed: "def"},

@@ -1215,3 +1215,138 @@ func TestExecutorArmsOnlyWhileDispatching(t *testing.T) {
 		t.Error("Drained() = true without a drain, want false")
 	}
 }
+
+// restoreEnv is a restore of tank/d (with child tank/d/c) into an empty backup/d.
+func restoreEnv(t *testing.T) (*execEnv, func(DatasetState) Plan) {
+	t.Helper()
+	env := newExecEnv(t, "tank/d", "backup/d")
+	parsed, err := cli.Parse([]string{"restore", "-r", "tank/d", "backup/d"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.opts = parsed.Options
+	env.sw.Create("tank", "")
+	env.sw.Create("tank/d", "")
+	env.sw.Snap("tank/d", "one")
+	env.sw.Snap("tank/d", "two")
+	env.sw.Create("tank/d/c", "")
+	env.sw.Snap("tank/d/c", "one")
+	env.tw.Create("backup", "")
+	return env, func(s DatasetState) Plan { return PlanRestore(s, Selection{}) }
+}
+
+// restoreRun gathers, plans and runs a restore with planner.
+func restoreRun(env *execEnv, planner func(DatasetState) Plan) []Result {
+	env.t.Helper()
+	states, err := Gather(context.Background(), env.srcEP, env.dstEP, env.opts, "")
+	if err != nil {
+		env.t.Fatal(err)
+	}
+	plans := make([]Plan, len(states))
+	for i, s := range states {
+		plans[i] = planner(s)
+	}
+	e := env.executor("")
+	e.Planner = planner
+	return e.Run(context.Background(), states, plans)
+}
+
+func noCallWithPrefix(t *testing.T, what string, calls []string, prefixes ...string) {
+	t.Helper()
+	for _, c := range calls {
+		for _, p := range prefixes {
+			if strings.HasPrefix(c, p) {
+				t.Errorf("%s made forbidden call %q", what, c)
+			}
+		}
+	}
+}
+
+func TestExecutorRestoreRun(t *testing.T) {
+	env, planner := restoreEnv(t)
+	var mu sync.Mutex
+	var recvs []zfs.RecvSpec
+	env.dst.Faults.Receive = func(s zfs.RecvSpec) error {
+		mu.Lock()
+		defer mu.Unlock()
+		recvs = append(recvs, s)
+		return nil
+	}
+	res := restoreRun(env, planner)
+	wantStatuses(t, res, StatusOK, StatusOK)
+	if got, want := dsSnaps(env.tw, "backup/d"), []string{"two"}; !eqStrings(got, want) {
+		t.Errorf("backup/d snaps %v, want %v", got, want)
+	}
+	if got, want := dsSnaps(env.tw, "backup/d/c"), []string{"one"}; !eqStrings(got, want) {
+		t.Errorf("backup/d/c snaps %v, want %v", got, want)
+	}
+	noCallWithPrefix(t, "source", env.src.Calls(), "Snapshot ", "Destroy", "Hold", "Release", "Bookmark")
+	noCallWithPrefix(t, "target", env.dst.Calls(), "Destroy", "DestroyDataset")
+	if len(recvs) == 0 {
+		t.Fatal("no receives recorded")
+	}
+	for _, s := range recvs {
+		if !containsStr(s.Args, "-s") || containsStr(s.Args, "-F") {
+			t.Errorf("receive into %s has args %v, want -s and no -F", s.Dataset, s.Args)
+		}
+	}
+}
+
+func containsStr(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestExecutorRestoreResumeReplansWithPlanner(t *testing.T) {
+	env, planner := restoreEnv(t)
+	env.dst.Faults.Receive = func(s zfs.RecvSpec) error {
+		if s.Dataset == "backup/d" {
+			return errors.New("connection lost")
+		}
+		return nil
+	}
+	if res := restoreRun(env, planner); res[0].Status == StatusOK {
+		t.Fatalf("interrupted run succeeded: %+v", res)
+	}
+	env.dst.Faults.Receive = nil
+	if env.tw.Dataset("backup/d").ResumeToken == "" {
+		t.Fatal("interrupted receive left no resume token")
+	}
+	var mu sync.Mutex
+	calls := 0
+	counting := func(s DatasetState) Plan {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return planner(s)
+	}
+	res := restoreRun(env, counting)
+	wantStatuses(t, res, StatusOK, StatusOK)
+	if got, want := dsSnaps(env.tw, "backup/d"), []string{"two"}; !eqStrings(got, want) {
+		t.Errorf("backup/d snaps %v, want %v", got, want)
+	}
+	// Two datasets are planned once each by restoreRun; the executor must
+	// have planned again itself.
+	if calls <= 2 {
+		t.Errorf("Planner called %d times, want the executor to re-plan too", calls)
+	}
+}
+
+func TestExecutorRestoreNeverDestroysOnConflict(t *testing.T) {
+	env, planner := restoreEnv(t)
+	env.dst.Faults.Receive = func(s zfs.RecvSpec) error {
+		if s.Dataset == "backup/d" {
+			return &zfs.DestinationExistsError{Name: "backup/d"}
+		}
+		return nil
+	}
+	res := restoreRun(env, planner)
+	if res[0].Status != StatusCritical {
+		t.Fatalf("backup/d status %v, want critical: %+v", res[0].Status, res[0])
+	}
+	noCallWithPrefix(t, "target", env.dst.Calls(), "Destroy", "DestroyDataset")
+}

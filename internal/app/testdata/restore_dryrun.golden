@@ -1,0 +1,6 @@
+tank/data → backup/data
+  send full @one  1.0 MiB
+  set compression=zstd
+tank/data/vm → backup/data/vm
+  send full @one  1.0 MiB
+Total estimated transfer: 2.0 MiB

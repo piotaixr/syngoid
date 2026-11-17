@@ -68,13 +68,16 @@ type Result struct {
 // DatasetState is the gathered state of one source/target pair. Snapshot
 // slices are sorted oldest to newest.
 type DatasetState struct {
-	Source, Target   string
-	SourceSnaps      []zfs.Snapshot
-	TargetSnaps      []zfs.Snapshot
-	SourceBookmarks  []zfs.Bookmark
-	TargetExists     bool
-	TargetUsed       int64
-	ResumeToken      string
+	Source, Target  string
+	SourceSnaps     []zfs.Snapshot
+	TargetSnaps     []zfs.Snapshot
+	SourceBookmarks []zfs.Bookmark
+	TargetExists    bool
+	TargetUsed      int64
+	ResumeToken     string
+	// ResumeGUID is the guid of the snapshot ResumeToken resumes, in decimal
+	// like zfs.Snapshot.GUID; "" when unknown or not gathered.
+	ResumeGUID       string
 	SyncProp         string
 	Origin           string
 	OriginInScope    bool
