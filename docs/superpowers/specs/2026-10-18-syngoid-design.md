@@ -120,6 +120,9 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
 | `--download-url=TEMPLATE` | Mirror URL template with `{version}`, `{os}`, `{arch}`, `{file}` placeholders. Default: `https://github.com/piotaixr/syngoid/releases/download/v{version}/{file}`. |
 | `--bin-store=DIR` | Additional local directory searched for agent binaries (`DIR/<os>-<arch>/syngoid`). |
 | `--remote-bin-dir=DIR` | Remote directory for the agent binary (default `~/.cache/syngoid/<ver>`). |
+| `--at=TIME` | `restore` only: for each dataset, restore the newest snapshot created at or before TIME (`2026-11-10`, `2026-11-10T03:00`, `2026-11-10T03:00:00`, or RFC 3339 with an offset; a space may replace the `T`; without an offset, local time; a date alone is 00:00:00). Mutually exclusive with `--snapshot`. |
+| `--snapshot=NAME` | `restore` only: restore the snapshot named NAME (the part after `@`) of each dataset. |
+| `--list` | `restore` only: list the restore points of SOURCE and exit; takes no TARGET and only `-r`, `--skip-parent`, `--exclude-datasets`, the source sudo flags, the ssh flags, the agent distribution flags, `--debug` and `--quiet`. |
 | `--otel-endpoint=URL` | Enable OTLP/HTTP log export to URL (also enabled by standard `OTEL_EXPORTER_OTLP_*` env vars). |
 
 ### 3.6 Removed options
@@ -138,6 +141,15 @@ Allowed receive flags: `h o x u v`. `R` in `--sendoptions` together with `--recu
 - **`permissions SOURCE TARGET [OPTIONS]`** — connects to both sides (same bootstrap as `sync`), computes the
   required permission set from OPTIONS (§6.2), checks it, and prints both the full minimal grant commands and the
   missing grants for each side. Exit 0 if everything is granted, 2 otherwise.
+- **`restore [OPTIONS] SOURCE TARGET`** and **`restore --list [OPTIONS] SOURCE`** — rebuilds TARGET from the backup
+  at SOURCE, the opposite direction of `sync` (design: `2026-11-15-syngoid-restore-design.md`). The point is the
+  newest snapshot, `--at TIME` or `--snapshot NAME`. Takes the `sync` options that still apply (`-r`,
+  `--skip-parent`, `--exclude-datasets`, `--preserve-*`, `-j`, transfer, ssh, sudo, agent and dry-run options); the
+  options that create, roll back, delete or clone (`--identifier`, `--no-stream`, `--no-sync-snap`,
+  `--keep-sync-snap`, `--create-bookmark`, `--use-hold`, `--no-rollback`, `--delete-target-snapshots`,
+  `--force-delete`, `--include-snaps`, `--exclude-snaps`, `--no-clone-handling`, `--no-resume`, `--dumpsnaps` and the
+  deprecated or ignored aliases) are usage errors. `--at`, `--snapshot` and `--list` are usage errors on `sync` and
+  `permissions`.
 - **`fetch (--platform OS/ARCH ... | --all) [--dir DIR] [--download-url TEMPLATE] [--quiet] [--debug]`** — downloads
   and verifies (§11.4) the agent binaries for this exact version into the user cache, or into `DIR` (§11.5 layout),
   for pre-seeding before air-gapped use. Exactly one of `--platform` (repeatable, each a §11.1 target) and `--all`

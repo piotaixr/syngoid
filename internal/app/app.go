@@ -75,6 +75,8 @@ func Main(ctx context.Context, args []string, env Env) int {
 		return runFetch(ctx, env, parsed.Fetch)
 	case cli.CmdServe:
 		return runServe(ctx, env)
+	case cli.CmdRestore:
+		return criticalf(env, "restore is not implemented yet")
 	case cli.CmdSync, cli.CmdPermissions:
 	}
 	return runSync(ctx, env, parsed)

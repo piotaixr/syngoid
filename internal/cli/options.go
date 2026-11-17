@@ -23,6 +23,7 @@ type Command string
 const (
 	CmdSync        Command = "sync"
 	CmdPermissions Command = "permissions"
+	CmdRestore     Command = "restore"
 	CmdFetch       Command = "fetch"
 	CmdVersion     Command = "version"
 	CmdServe       Command = "serve"
@@ -64,6 +65,9 @@ type Options struct {
 	BinStores    []string
 	RemoteBinDir string
 	OTelEndpoint string
+
+	// Restore is set for the restore command only.
+	Restore *RestoreOptions
 }
 
 // Parsed is the result of Parse.
@@ -86,6 +90,7 @@ func Usage() string {
 var subcommands = map[string]Command{
 	"sync":        CmdSync,
 	"permissions": CmdPermissions,
+	"restore":     CmdRestore,
 	"fetch":       CmdFetch,
 	"version":     CmdVersion,
 	"serve":       CmdServe,
@@ -120,6 +125,9 @@ type raw struct {
 	binStores    []string
 	remoteBinDir string
 	otelEndpoint string
+
+	at, snapshot string
+	list         bool
 
 	// Deprecated aliases.
 	sshPort, sshKey, sshCipher, sshConfigOld, mbufferSize string
@@ -180,6 +188,10 @@ func newFlagSet(r *raw) *pflag.FlagSet {
 	fs.StringArrayVar(&r.binStores, "bin-store", nil, "extra directory searched for agent binaries (repeatable)")
 	fs.StringVar(&r.remoteBinDir, "remote-bin-dir", "", "remote directory for the agent binary")
 	fs.StringVar(&r.otelEndpoint, "otel-endpoint", "", "OTLP/HTTP log export endpoint")
+
+	fs.StringVar(&r.at, "at", "", "restore: newest snapshot created at or before TIME")
+	fs.StringVar(&r.snapshot, "snapshot", "", "restore: the snapshot named NAME")
+	fs.BoolVar(&r.list, "list", false, "restore: list the restore points of SOURCE and exit")
 
 	hidden := func(name string) { _ = fs.MarkHidden(name) }
 	fs.StringVar(&r.sshPort, "sshport", "", "deprecated: use -o Port=N")
@@ -257,13 +269,23 @@ func Parse(args []string, localPoolExists func(string) bool) (Parsed, error) {
 		}
 		return Parsed{Command: cmd}, nil
 	}
-	if len(pos) != 2 {
+	restore, err := r.checkRestoreFlags(fs, cmd, pos)
+	if err != nil {
+		return Parsed{}, err
+	}
+	if restore == nil && len(pos) != 2 {
 		return Parsed{}, fmt.Errorf("%s requires exactly SOURCE and TARGET (got %d arguments)", cmd, len(pos))
 	}
 
 	o, warnings, err := r.build(fs, localPoolExists, pos)
 	if err != nil {
 		return Parsed{}, err
+	}
+	if restore != nil {
+		o.Restore = restore
+		// restore never creates, rolls back or clones anything; these make the
+		// shared receive and need computations do exactly that.
+		o.NoSyncSnap, o.NoStream, o.NoRollback, o.NoCloneHandling = true, true, true, true
 	}
 	return Parsed{Command: cmd, Options: o, Warnings: warnings}, nil
 }
@@ -398,6 +420,9 @@ func (r *raw) build(fs *pflag.FlagSet, localPoolExists func(string) bool, pos []
 	}
 	if o.Source, err = ParseLocation(pos[0], localPoolExists); err != nil {
 		return nil, nil, fmt.Errorf("SOURCE: %w", err)
+	}
+	if len(pos) == 1 { // restore --list has no TARGET
+		return o, warnings, nil
 	}
 	if o.Target, err = ParseLocation(pos[1], localPoolExists); err != nil {
 		return nil, nil, fmt.Errorf("TARGET: %w", err)
