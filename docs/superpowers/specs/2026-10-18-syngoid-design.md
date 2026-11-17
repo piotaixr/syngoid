@@ -778,6 +778,17 @@ Give `fetch --dir` a dedicated directory: a `SHA256SUMS` there that does not ver
   snapshots `s1` and `s2`, replicated with `--recursive --jobs 3` and with `--jobs 1` into separate targets; every
   dataset has the same user snapshots (`s1`, `s2`) on both and at least one sync snapshot. A further `--jobs 3` run
   after a new snapshot `s3` everywhere brings `s3` to every target.
+- **Restore (`TestITRestore*`, design in `2026-11-15-syngoid-restore-design.md` §12):**
+  - `TestITRestoreNewest`: recursive restore of the newest snapshot; data and guids match, one snapshot per target dataset, source untouched.
+  - `TestITRestoreSnapshotAndAt`: `--snapshot` and `--at` pick the expected snapshot per dataset.
+  - `TestITRestoreRerunAndConflict`: a finished restore re-run does nothing and exits 0; a local snapshot on the target fails the re-run with nothing sent.
+  - `TestITRestoreRerunAfterNewSourceSnapshot`: a re-run after a new source snapshot exits 2 with nothing sent, both sides unchanged.
+  - `TestITRestoreExistingTargetSendsNothing`: an existing target dataset fails the command, target unchanged.
+  - `TestITRestoreInterruptThenResume`: an interrupted restore resumes on re-run.
+  - `TestITRestoreAbortOwnPartial`: a restore's own partial receive whose source snapshot is gone leaves the rest of the target and the source unchanged.
+  - `TestITRestoreClone`: a clone is restored as an independent dataset.
+  - `TestITRestoreUnprivileged`: restore with only the §8 delegations.
+  - `TestITRestoreThenReplicateBack`: syngoid from the restored dataset back to the backup sends an incremental.
 - **FreeBSD and OmniOS, nightly:** VM-based jobs (vmactions) running the same suite.
 - **Cross-compile** all targets on every PR.
 

@@ -143,6 +143,32 @@ func TestITRestoreRerunAndConflict(t *testing.T) {
 	equal(t, "snapshots after the conflict", snapsR(t, dst), withLocal)
 }
 
+func TestITRestoreRerunAfterNewSourceSnapshot(t *testing.T) {
+	begin(t)
+	b := srcPool + "/rs"
+	dst := dstPool + "/rs"
+	zfs(t, "create", b)
+	writeAndSnap(t, b, "one", "s1", 1<<20)
+
+	syngoidOK(t, "restore", b, dst)
+	restored := snapsR(t, dst)
+	equal(t, "restored snapshots", restored, []string{dst + "@s1"})
+
+	// The newest point is now s2, which the target does not hold: the
+	// re-run must fail and touch nothing on either side.
+	writeAndSnap(t, b, "two", "s2", 1<<20)
+	srcBefore := snapsR(t, b)
+	r := syngoid(t, "restore", b, dst)
+	if r.code != 2 {
+		t.Fatalf("re-run after a new source snapshot: exit %d, want 2", r.code)
+	}
+	if !strings.Contains(r.stderr, "restore needs an empty target") {
+		t.Fatalf("conflict message missing from stderr:\n%s", r.stderr)
+	}
+	equal(t, "target snapshots after the conflict", snapsR(t, dst), restored)
+	equal(t, "source snapshots after the conflict", snapsR(t, b), srcBefore)
+}
+
 func TestITRestoreExistingTargetSendsNothing(t *testing.T) {
 	begin(t)
 	b, c, d := srcPool+"/ex", srcPool+"/ex/c", srcPool+"/ex/d"
