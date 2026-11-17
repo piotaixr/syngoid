@@ -85,8 +85,8 @@ func TestRenderPlanNotes(t *testing.T) {
 	}}
 	var b bytes.Buffer
 	RenderPlan(&b, plans, goldenSync, nil)
-	want := "backup/d → tank/d\n  send full @two\n  set compression=zstd\n  set quota=10G\n"
-	if !strings.HasPrefix(b.String(), want) {
-		t.Errorf("got %q, want prefix %q", b.String(), want)
+	want := "backup/d → tank/d\n  send full @two\n  set compression=zstd\n  set quota=10G\nTotal estimated transfer: 0 B\n"
+	if b.String() != want {
+		t.Errorf("got %q, want %q", b.String(), want)
 	}
 }
