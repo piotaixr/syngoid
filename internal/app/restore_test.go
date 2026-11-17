@@ -176,6 +176,11 @@ func TestRestoreNothingQualifies(t *testing.T) {
 			want: "CRITICAL ERROR: no dataset under tank/data has a snapshot named zz; list the restore points with: syngoid restore --list -r tank/data\n",
 		},
 		{
+			name: "scope flags",
+			args: []string{"--snapshot", "zz", "-r", "--skip-parent", "--exclude-datasets=/scratch$", "--exclude-datasets=^x"},
+			want: "CRITICAL ERROR: no dataset under tank/data has a snapshot named zz; list the restore points with: syngoid restore --list -r --skip-parent --exclude-datasets='/scratch$' --exclude-datasets='^x' tank/data\n",
+		},
+		{
 			name: "at",
 			args: []string{"--at", "1970-01-01T00:00:10Z"},
 			want: "CRITICAL ERROR: no dataset under tank/data has a snapshot at or before 1970-01-01T00:00:10Z; list the restore points with: syngoid restore --list tank/data\n",
@@ -206,6 +211,17 @@ func TestRestoreNothingQualifies(t *testing.T) {
 			t.Errorf("stderr does not contain %q:\n%s", want, se.stderr)
 		}
 	})
+}
+
+func TestRestoreEmptyScope(t *testing.T) {
+	se := newSyncEnv(t, endpoint.HostInfo{})
+	if got := se.run("restore", "-r", "--exclude-datasets=^tank", "tank/data", "backup/data"); got != 2 {
+		t.Fatalf("exit code = %d, want 2", got)
+	}
+	want := "CRITICAL ERROR: no dataset in scope under tank/data\n"
+	if !strings.Contains(se.stderr.String(), want) || strings.Contains(se.stderr.String(), "--list") {
+		t.Errorf("stderr = %q, want %q and no --list hint", se.stderr, want)
+	}
 }
 
 func TestRestoreParentWithoutSnapshot(t *testing.T) {

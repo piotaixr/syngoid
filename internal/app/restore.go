@@ -48,12 +48,15 @@ func runRestoreList(ctx context.Context, env Env, parsed cli.Parsed) int {
 // restoreNothingQualifies returns the critical message of restore design
 // §5.4 when sel picks a snapshot for no dataset of states, or "".
 func restoreNothingQualifies(o *cli.Options, sel engine.Selection, states []engine.DatasetState) string {
+	src := o.Source.String()
+	if len(states) == 0 {
+		return "no dataset in scope under " + src
+	}
 	for _, s := range states {
 		if _, ok := sel.Pick(s.SourceSnaps); ok {
 			return ""
 		}
 	}
-	src := o.Source.String()
 	var what string
 	switch {
 	case sel.Name != "":
@@ -63,11 +66,18 @@ func restoreNothingQualifies(o *cli.Options, sel engine.Selection, states []engi
 	default:
 		what = "any snapshot"
 	}
-	list := src
+	list := []string{}
 	if o.Recursive {
-		list = "-r " + src
+		list = append(list, "-r")
 	}
-	return fmt.Sprintf("no dataset under %s has %s; list the restore points with: syngoid restore --list %s", src, what, list)
+	if o.SkipParent {
+		list = append(list, "--skip-parent")
+	}
+	for _, re := range o.ExcludeDatasets {
+		list = append(list, "--exclude-datasets='"+re.String()+"'")
+	}
+	list = append(list, src)
+	return fmt.Sprintf("no dataset under %s has %s; list the restore points with: syngoid restore --list %s", src, what, strings.Join(list, " "))
 }
 
 // restoreConflicts returns the conflict block of restore design §6.4 for
