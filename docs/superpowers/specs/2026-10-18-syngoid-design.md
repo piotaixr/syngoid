@@ -537,7 +537,8 @@ Built per receive: `-s` unless `--no-resume`; `-F` unless `--no-rollback`; `-u` 
 
 Before each send: check the target is not busy (`ReceiveBusy`; busy → soft failure for that dataset) and that the
 action's preconditions hold (incremental base exists on both sides with equal guid). Stale preconditions → re-gather
-and re-plan the dataset.
+and re-plan the dataset. The executor re-plans (refresh, re-gather, remediation) with the planner it was given,
+so `restore` never falls back to the sync planner.
 
 Typed errors from `internal/zfs` (stderr classification, `LC_ALL=C`):
 

@@ -94,7 +94,7 @@ func (d *dsRun) replan(ctx context.Context, originInScope bool, cause error) ste
 		return d.end(StatusCritical, fmt.Sprintf("%s: re-gather failed: %v", d.st.Source, err), err)
 	}
 	d.st = stripSyncSnap(st)
-	d.plan = PlanDataset(d.st, d.e.PlanOpts)
+	d.plan = d.e.plan(d.st)
 	switch {
 	case d.plan.Status == StatusOK:
 		return stepRestart
