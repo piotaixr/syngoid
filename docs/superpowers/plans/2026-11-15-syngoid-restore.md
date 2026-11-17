@@ -31,7 +31,7 @@
     `no snapshot of <source> at or before <TIME>`; `no snapshot <NAME> on <source>`; `no snapshots on <source>`.
     `<TIME>` is the `--at` instant formatted with `time.RFC3339`.
   - `--at` usage error: `--at: invalid time "<value>" (want 2026-11-10, 2026-11-10T03:00, 2026-11-10T03:00:00 or RFC 3339 with an offset)`.
-- Every commit message ends with a blank line and `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>`.
+- Every commit message ends with a blank line and `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Each task that changes behaviour described in the main spec edits that spec section in the same commit (listed per task).
 
 ## Review Focus
