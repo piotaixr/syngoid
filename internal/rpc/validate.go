@@ -91,6 +91,14 @@ func Validate(method string, params any) error {
 		if !validJoined(p.Bookmark, '#') {
 			return &InvalidError{Field: "bookmark", Value: p.Bookmark}
 		}
+	case MethodResumeGUID:
+		p, ok := paramsAs[ResumeGUIDParams](params)
+		if !ok {
+			return badParams(params)
+		}
+		if !resumeTokenRE.MatchString(p.Token) {
+			return &InvalidError{Field: "token", Value: p.Token}
+		}
 	case MethodSendEstimate:
 		p, ok := paramsAs[SendEstimateParams](params)
 		if !ok {

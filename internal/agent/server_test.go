@@ -238,7 +238,7 @@ func TestServeHello(t *testing.T) {
 	h := newHarness(t, nil)
 	got := h.hello(rpc.Hello{Protocol: 1, Version: "dev", BuildHash: "x"})
 	want := rpc.HelloReply{
-		Protocol: 1, Version: "dev", BuildHash: buildinfo.BuildHash(), ExeSHA256: "abc123",
+		Protocol: buildinfo.ProtocolVersion, Version: "dev", BuildHash: buildinfo.BuildHash(), ExeSHA256: "abc123",
 		OS: runtime.GOOS, Arch: runtime.GOARCH,
 		User: "backup", UID: 1234, Groups: []string{"backup", "zfs"}, ZFSVersion: "zfs-2.2.0",
 		Home: "/home/backup",
@@ -354,6 +354,11 @@ func TestServeDispatch(t *testing.T) {
 			func(t *testing.T) any {
 				return must(t)(ref.SendEstimate(ctx, zfs.SendSpec{Dataset: "tank", To: "c", FromSnap: "a"}))
 			},
+		},
+		{
+			"resume_guid", rpc.MethodResumeGUID,
+			rpc.ResumeGUIDParams{Token: "tok"},
+			func(t *testing.T) any { return must(t)(ref.ResumeGUID(ctx, "tok")) },
 		},
 		{
 			"receive_busy", rpc.MethodReceiveBusy,

@@ -786,3 +786,23 @@ func TestFakeResumeRegistryCleanup(t *testing.T) {
 	err := src.Send(ctx, send, endpoint.SendOpts{Codec: stream.None}, io.Discard)
 	wantStderr(t, err, "cannot resume send: invalid resume token 'tok-1'")
 }
+
+func TestFakeResumeGUID(t *testing.T) {
+	sw, _, src, dst := pair()
+	dst.Faults.Receive = func(zfs.RecvSpec) error { return zfs.ErrPartialState }
+	_, rerr := replicate(src, dst, stream.None, fullSpec("s1"), zfs.RecvSpec{Dataset: "backup/a", Args: []string{"-s"}})
+	if !errors.Is(rerr, zfs.ErrPartialState) {
+		t.Fatalf("receive err = %v, want ErrPartialState", rerr)
+	}
+	props, err := dst.GetProps(ctx, "backup/a", "receive_resume_token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := src.ResumeGUID(ctx, props["receive_resume_token"])
+	if want := sw.Dataset("tank/a").Snaps[0].GUID; err != nil || got != want {
+		t.Errorf("ResumeGUID = %q, %v; want %q", got, err, want)
+	}
+	if got, err := src.ResumeGUID(ctx, "nope"); err != nil || got != "" {
+		t.Errorf("ResumeGUID(nope) = %q, %v; want empty", got, err)
+	}
+}

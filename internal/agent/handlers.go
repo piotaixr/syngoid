@@ -74,6 +74,9 @@ var handlers = map[string]handler{
 	rpc.MethodSendEstimate: typed(rpc.MethodSendEstimate, func(ctx context.Context, ep endpoint.Endpoint, p rpc.SendEstimateParams) (any, error) {
 		return ep.SendEstimate(ctx, p.Spec)
 	}),
+	rpc.MethodResumeGUID: typed(rpc.MethodResumeGUID, func(ctx context.Context, ep endpoint.Endpoint, p rpc.ResumeGUIDParams) (any, error) {
+		return ep.ResumeGUID(ctx, p.Token)
+	}),
 	rpc.MethodReceiveBusy: typed(rpc.MethodReceiveBusy, func(ctx context.Context, ep endpoint.Endpoint, p rpc.ReceiveBusyParams) (any, error) {
 		return ep.ReceiveBusy(ctx, p.Datasets)
 	}),

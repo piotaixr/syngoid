@@ -636,6 +636,16 @@ func (e *Endpoint) AbortResume(_ context.Context, ds string) error {
 	return nil
 }
 
+// ResumeGUID returns the GUID of the snapshot the stream registered under
+// token delivers, or "" when this World sent no such stream.
+func (e *Endpoint) ResumeGUID(_ context.Context, token string) (string, error) {
+	h, ok, err := lookupResume(e.world.id, token, "")
+	if err != nil || !ok || len(h.Snaps) == 0 {
+		return "", err
+	}
+	return h.Snaps[len(h.Snaps)-1].GUID, nil
+}
+
 // SendEstimate returns 1 MiB per snapshot the stream carries (at least 4096),
 // or 0 when the stream cannot be built.
 func (e *Endpoint) SendEstimate(_ context.Context, s zfs.SendSpec) (int64, error) {

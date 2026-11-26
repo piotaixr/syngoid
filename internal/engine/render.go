@@ -50,6 +50,9 @@ func RenderPlan(w io.Writer, plans []Plan, syncSnap string, est func(Plan, Actio
 				}
 				b.WriteString("\n")
 			}
+			for _, n := range p.Notes {
+				b.WriteString("  " + n + "\n")
+			}
 		case StatusSkipped:
 			writeMessage(&b, "skip: ", p.Message)
 		case StatusNothing:

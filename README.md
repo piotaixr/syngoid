@@ -155,6 +155,8 @@ which mise provides on Linux x64 and Apple-silicon macOS only.
 
 ```
 syngoid [sync] [flags] SOURCE TARGET
+syngoid restore [flags] SOURCE TARGET
+syngoid restore --list [flags] SOURCE
 syngoid permissions [flags] SOURCE TARGET
 syngoid fetch (--platform OS/ARCH ... | --all) [--dir DIR]
 syngoid version
@@ -210,6 +212,45 @@ syngoid is still gathering or planning, the first Ctrl-C aborts and a second exi
 A receive commits each snapshot of an `-I` stream separately, so a run that carries many snapshots per dataset is
 slow whatever their size. Run syngoid more often so each run carries few snapshots, or use `--jobs` to catch up
 several datasets at once.
+
+## Disaster recovery
+
+`syngoid restore` rebuilds a lost host's datasets from a backup: it replicates from the backup (SOURCE) to the new
+host (TARGET), the opposite direction of `sync`. Either side may be remote.
+
+```sh
+# List the restore points on the backup, newest first.
+syngoid restore --list -r nas:backup/data
+
+# Restore the newest snapshot of every dataset.
+syngoid restore -r nas:backup/data tank/data
+
+# Restore the state at a point in time, or at a named snapshot.
+syngoid restore -r --at '2026-11-14 00:00' nas:backup/data tank/data
+syngoid restore -r --snapshot autosnap_2026-11-14_00:00:01_daily nas:backup/data tank/data
+```
+
+`--list` prints one row per snapshot name with its creation time, how many datasets in scope have it, and which do
+not (`missing:` names up to three datasets, otherwise their number). `restore` accepts the `sync` options that still
+apply (`-r`, `--skip-parent`, `--exclude-datasets`, `--preserve-*`, `-j`, `--dry-run`, `--confirm`, transfer, ssh,
+sudo and agent options); the options that create, roll back or delete snapshots or datasets are usage errors.
+
+- **The target must be empty.** An existing target dataset fails the whole command before anything is sent, with
+  the list of datasets to destroy first or the advice to restore elsewhere. A target that is a pool root always
+  exists, so restore into a dataset below it or use `--skip-parent`. The only existing datasets accepted are the
+  ones an earlier run of the same restore created or left interrupted.
+- **Properties.** Restored datasets inherit their properties from the target pool unless `--preserve-properties` is
+  given; that flag carries the backup's own settings (for example `readonly`).
+- **Re-running.** A re-run continues an interrupted restore only while the backup and the restored datasets are
+  unchanged. Finish the restore before putting the new host to use: replicating back to the backup, sanoid, or any
+  other snapshot on the restored datasets makes a re-run fail. Pause pruning on the backup while a restore with
+  `--at` is in progress.
+- **After restoring the newest point**, `syngoid NEWHOST BACKUP` (a normal `sync` back) continues incrementally.
+- **After restoring an older point**, the backup holds newer snapshots, and a normal `sync` from the restored host
+  would roll the backup back and destroy them. Keep them by replicating to a new backup location, or accept the loss
+  knowingly.
+- **Sync snapshots of the lost host.** Snapshots named `syncoid_<oldhost>_…` arrive with the restore and are not
+  pruned by the new host; destroy them by hand when they are no longer needed.
 
 ## Differences from syncoid
 

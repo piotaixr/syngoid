@@ -49,6 +49,9 @@ type Endpoint interface {
 	Bookmark(ctx context.Context, snapshot, bookmark string) error
 	AbortResume(ctx context.Context, ds string) error
 	SendEstimate(ctx context.Context, s zfs.SendSpec) (int64, error)
+	// ResumeGUID returns, in decimal, the guid of the snapshot the resume
+	// token resumes; "" when it cannot be read.
+	ResumeGUID(ctx context.Context, token string) (string, error)
 
 	// ReceiveBusy reports which of datasets are the target of a running
 	// zfs receive.
